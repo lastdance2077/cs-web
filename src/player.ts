@@ -109,12 +109,22 @@ export class PlayerController {
       this.weapons.clear();
       this.weapons.set('knife', new WeaponSystem('knife'));
       this.weapons.set('usp', new WeaponSystem('usp'));
-      this.switchSlot('secondary');
+      this.currentSlot = 'secondary';
     }
     this.money = money;
-    this.currentSlot = 'secondary';
     if (!this.weapons.has('usp')) this.weapons.set('usp', new WeaponSystem('usp'));
     if (!this.weapons.has('knife')) this.weapons.set('knife', new WeaponSystem('knife'));
+    // 保留的武器每回合补满弹药（CS:GO 规则）
+    for (const w of this.weapons.values()) {
+      w.ammoInMag = w.def.magSize;
+      w.reserve = w.def.reserve;
+      w.reloading = false;
+      w.reloadT = 0;
+      w.scoped = false;
+    }
+    // 开局端主武器（有步枪/大狙时），否则副武器
+    this.currentSlot = [...this.weapons.values()].some((w) => w.def.slot === 'primary') ? 'primary' : 'secondary';
+    this.updateCurrentId();
   }
 
   get weapon(): WeaponSystem {
@@ -125,8 +135,15 @@ export class PlayerController {
     const def = WEAPON_DEFS[id];
     if (!def) return false;
     if (this.money < def.price) return false;
+    if (this.weapons.has(id)) return false; // 已拥有同款枪，不重复购买
     this.money -= def.price;
     const slot: 'primary' | 'secondary' | 'melee' = def.slot === 'melee' ? 'melee' : def.slot === 'secondary' ? 'secondary' : 'primary';
+    // 同槽位只能留一把：买新枪替换旧枪（CS:GO 规则）
+    const toRemove: string[] = [];
+    for (const [k, w] of this.weapons) {
+      if (w.def.slot === def.slot) toRemove.push(k);
+    }
+    for (const k of toRemove) this.weapons.delete(k);
     this.weapons.set(id, new WeaponSystem(id));
     if (slot === 'primary') this.currentSlot = 'primary';
     else if (slot === 'secondary') this.currentSlot = 'secondary';

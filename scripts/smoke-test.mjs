@@ -140,12 +140,18 @@ try {
   });
   await page.keyboard.press('b');
   await sleep(300);
-  const rifleId = await page.evaluate(() => {
-    const el = [...document.querySelectorAll('.buy-item')].find((e) => ['ak', 'm4'].includes(e.dataset.buy));
-    return el && !el.classList.contains('disabled') ? el.dataset.buy : null;
+  // 优先买未拥有的 AWP（验证“买新枪替换旧枪”），若已拥有步枪会提示“已拥有该武器”
+  const buyTarget = await page.evaluate(() => {
+    const owned = [...window.__game.player.weapons.keys()];
+    const el = [...document.querySelectorAll('.buy-item')].find((e) => {
+      if (e.classList.contains('disabled')) return false;
+      const id = e.dataset.buy;
+      return id && ['ak', 'm4', 'awp'].includes(id) && !owned.includes(id);
+    });
+    return el ? el.dataset.buy : null;
   });
-  if (rifleId) {
-    await page.click(`.buy-item[data-buy="${rifleId}"]`);
+  if (buyTarget) {
+    await page.click(`.buy-item[data-buy="${buyTarget}"]`);
     await sleep(250);
   }
   const clickBuy = await page.evaluate(() => {

@@ -195,8 +195,8 @@ export class Game {
     this.buyOpen = false;
     this.el.buyMenu.style.display = 'none';
 
-    // 玩家
-    const keepWeapons = this.player.alive && this.player.health > 0;
+    // 玩家（换边时 CS:GO 规则不保留武器）
+    const keepWeapons = this.player.alive && this.player.health > 0 && playerTeam === this.player.team;
     this.spectateBot = null;
     this.player.viewmodel.visible = true;
     for (const c of this.player.camera.children) {
@@ -232,7 +232,7 @@ export class Game {
         bot.money,
         'siteA',
         'A',
-        bot.alive && bot.health > 0,
+        bot.alive && bot.health > 0 && botTeam === bot.team,
         faceSpawn(botSpawn),
       );
       bot.armor = 0;
@@ -1191,6 +1191,10 @@ export class Game {
     const def = WEAPONS[id];
     if (!def) return;
     if (def.team !== 'both' && def.team !== p.team) return;
+    if (p.weapons.has(id)) {
+      this.buyToast('已拥有该武器');
+      return;
+    }
     if (p.money < def.price) {
       this.buyToast(`余额不足，需要 $${def.price}`);
       return;

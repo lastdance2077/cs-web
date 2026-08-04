@@ -157,6 +157,14 @@ export class Bot {
       this.weapons.set('usp', new WeaponSystem('usp'));
       this.switchSlot('secondary');
     }
+    // 保留的武器每回合补满弹药（CS:GO 规则）
+    for (const w of this.weapons.values()) {
+      w.ammoInMag = w.def.magSize;
+      w.reserve = w.def.reserve;
+      w.reloading = false;
+      w.reloadT = 0;
+      w.scoped = false;
+    }
     this.aimYaw = yaw;
   }
 
@@ -182,7 +190,14 @@ export class Bot {
   buyWeapon(id: string) {
     const def = WEAPONS[id];
     if (!def || this.money < def.price) return false;
+    if (this.weapons.has(id)) return false; // 已拥有同款枪，不重复购买
     this.money -= def.price;
+    // 同槽位只能留一把：买新枪替换旧枪（CS:GO 规则）
+    const toRemove: string[] = [];
+    for (const [k, w] of this.weapons) {
+      if (w.def.slot === def.slot) toRemove.push(k);
+    }
+    for (const k of toRemove) this.weapons.delete(k);
     this.weapons.set(id, new WeaponSystem(id));
     this.switchSlot(def.slot as 'primary' | 'secondary' | 'melee');
     return true;
