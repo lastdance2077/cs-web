@@ -81,6 +81,10 @@ export class Bot {
   private wanderT = 0;
   private wanderOffset = new THREE.Vector3();
   private stuckT = 0;
+  private detour: { pos: THREE.Vector3; t: number } | null = null;
+  private aimErrT = 0;
+  private aimErrYaw = 0;
+  private aimErrPitch = 0;
   private deathT = 0;
   private interact: { type: 'plant' | 'defuse'; t: number; total: number } | null = null;
   actions: BotActions = {
@@ -138,6 +142,10 @@ export class Bot {
     this.path = [];
     this.interact = null;
     this.heardPos = null;
+    this.detour = null;
+    this.aimErrT = 0;
+    this.aimErrYaw = 0;
+    this.aimErrPitch = 0;
     this.money = money;
     this.deathT = 0;
     this.model.group.rotation.set(0, 0, 0);
@@ -330,6 +338,9 @@ export class Bot {
         if (this.stuckT > 1.0) {
           this.repathT = 0;
           this.stuckT = 0;
+          if (!this.detour || this.detour.t <= 0) {
+            this.detour = { pos: this.pickDetourPoint(world), t: 2.2 };
+          }
         }
       } else {
         this.stuckT = 0;
@@ -445,6 +456,14 @@ export class Bot {
   }
 
   private nextPathDir(): THREE.Vector3 {
+    // 卡住绕行：优先走向临时的脱困点
+    if (this.detour && this.detour.t > 0) {
+      const dx = this.detour.pos.x - this.move.pos.x;
+      const dz = this.detour.pos.z - this.move.pos.z;
+      const d = Math.hypot(dx, dz);
+      if (d < 55) this.detour = null;
+      return d > 0.001 ? new THREE.Vector3(dx / d, 0, dz / d) : new THREE.Vector3();
+    }
     if (!this.path.length) return new THREE.Vector3();
     const target = this.path[Math.min(this.pathIdx, this.path.length - 1)].clone();
     if (this.pathIdx >= this.path.length - 1) {
@@ -453,12 +472,17 @@ export class Bot {
       if (nav && this.wanderOffset.lengthSq() > 0) {
         const cand = target.clone().add(this.wanderOffset);
         const tile = nav.worldToTile(cand);
-        if (nav.isWalkable(tile.x, tile.z)) {
+        if (nav.isWalkable(tile.x, tile.z) && nav.segmentClear(this.move.pos, cand)) {
           target.copy(cand);
         } else {
           const alt = nav.nearestWalkable(tile.x, tile.z);
-          if (alt) target.copy(nav.tileToWorld(alt.x, alt.z));
-          else this.wanderOffset.set(0, 0, 0); // 周围没空地就原地待着
+          if (alt) {
+            const altPos = nav.tileToWorld(alt.x, alt.z);
+            if (nav.segmentClear(this.move.pos, altPos)) target.copy(altPos);
+            else this.wanderOffset.set(0, 0, 0);
+          } else {
+            this.wanderOffset.set(0, 0, 0); // 周围没空地就原地待着
+          }
         }
       }
     }
@@ -472,6 +496,10 @@ export class Bot {
   }
 
   private followPath(dt: number) {
+    if (this.detour) {
+      this.detour.t -= dt;
+      if (this.detour.t <= 0) this.detour = null;
+    }
     // 快到目标时加一点随机游走，避免扎堆
     if (this.path.length && this.pathIdx >= this.path.length - 1) {
       this.wanderT -= dt;
@@ -480,6 +508,27 @@ export class Bot {
         this.wanderOffset.set((Math.random() - 0.5) * 180, 0, (Math.random() - 0.5) * 180);
       }
     }
+  }
+
+  /** 卡住时选一个附近可走、直线不撞墙的点作为临时脱困目标 */
+  private pickDetourPoint(world: BotWorld): THREE.Vector3 {
+    const nav = botWorldMap.get(this)?.nav;
+    for (let k = 0; k < 10; k++) {
+      const ang = Math.random() * Math.PI * 2;
+      const dist = 130 + Math.random() * 150;
+      const cand = new THREE.Vector3(
+        this.move.pos.x + Math.cos(ang) * dist,
+        0,
+        this.move.pos.z + Math.sin(ang) * dist,
+      );
+      if (nav) {
+        const t = nav.worldToTile(cand);
+        if (!nav.isWalkable(t.x, t.z)) continue;
+        if (!nav.segmentClear(this.move.pos, cand)) continue;
+      }
+      return cand;
+    }
+    return this.move.pos.clone();
   }
 
   private handleInteract(dt: number, world: BotWorld) {
@@ -535,13 +584,17 @@ export class Bot {
     const flat = Math.hypot(aim.x - eye.x, aim.z - eye.z);
     const targetPitch = Math.atan2(aim.y - eye.y, flat);
 
-    // 带误差缓慢转向
-    const err = (Math.random() - 0.5) * 2 * this.diff.aimError;
-    const errP = (Math.random() - 0.5) * 2 * this.diff.aimError;
+    // 带误差缓慢转向：误差偏移每隔一小段重新取，避免每帧白噪声导致观战镜头狂抖
+    this.aimErrT -= dt;
+    if (this.aimErrT <= 0) {
+      this.aimErrT = 0.2 + Math.random() * 0.35;
+      this.aimErrYaw = (Math.random() - 0.5) * 2 * this.diff.aimError;
+      this.aimErrPitch = (Math.random() - 0.5) * 2 * this.diff.aimError;
+    }
     const maxTurn = this.diff.aimTurnSpeed * dt;
-    const dy = wrapAngle(targetYaw + err - this.aimYaw);
+    const dy = wrapAngle(targetYaw + this.aimErrYaw - this.aimYaw);
     this.aimYaw += Math.max(-maxTurn, Math.min(maxTurn, dy));
-    const dp = clamp(targetPitch + errP - this.aimPitch, -1, 1);
+    const dp = clamp(targetPitch + this.aimErrPitch - this.aimPitch, -1, 1);
     this.aimPitch += Math.max(-maxTurn, Math.min(maxTurn, dp));
 
     // 开火判定

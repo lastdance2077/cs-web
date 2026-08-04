@@ -85,6 +85,8 @@ export class NavGrid {
     public h: number,
     public walkable: Uint8Array,
     public tile: number,
+    /** 墙体/木箱 brush（用于按角色半宽避让墙角），不含地面 */
+    public blockers: Brush[] = [],
   ) {}
 
   isWalkable(x: number, z: number) {
@@ -114,6 +116,51 @@ export class NavGrid {
       const e2 = 2 * err;
       if (e2 >= dy) { err += dy; x += sx; }
       if (e2 <= dx) { err += dx; z += sy; }
+    }
+    return true;
+  }
+
+  /** 直线 a->b 是否与所有障碍物（按角色半宽 r 膨胀后）不相交，避免斜穿墙角 */
+  segmentClear(a: THREE.Vector3, b: THREE.Vector3, r = 16): boolean {
+    for (const brush of this.blockers) {
+      const [bx0, by0, bz0] = brush.min;
+      const [bx1, by1, bz1] = brush.max;
+      const ex = bx0 - r, fx = bx1 + r;
+      const ey = by0 - r, fy = by1 + r;
+      const ez = bz0 - r, fz = bz1 + r;
+      const dx = b.x - a.x, dy = b.y - a.y, dz = b.z - a.z;
+      let tmin = 0, tmax = 1;
+      // X slab
+      if (Math.abs(dx) < 1e-9) {
+        if (a.x < ex || a.x > fx) continue;
+      } else {
+        let t1 = (ex - a.x) / dx, t2 = (fx - a.x) / dx;
+        if (t1 > t2) { const t = t1; t1 = t2; t2 = t; }
+        tmin = Math.max(tmin, t1);
+        tmax = Math.min(tmax, t2);
+        if (tmin > tmax) continue;
+      }
+      // Y slab
+      if (Math.abs(dy) < 1e-9) {
+        if (a.y < ey || a.y > fy) continue;
+      } else {
+        let t1 = (ey - a.y) / dy, t2 = (fy - a.y) / dy;
+        if (t1 > t2) { const t = t1; t1 = t2; t2 = t; }
+        tmin = Math.max(tmin, t1);
+        tmax = Math.min(tmax, t2);
+        if (tmin > tmax) continue;
+      }
+      // Z slab
+      if (Math.abs(dz) < 1e-9) {
+        if (a.z < ez || a.z > fz) continue;
+      } else {
+        let t1 = (ez - a.z) / dz, t2 = (fz - a.z) / dz;
+        if (t1 > t2) { const t = t1; t1 = t2; t2 = t; }
+        tmin = Math.max(tmin, t1);
+        tmax = Math.min(tmax, t2);
+        if (tmin > tmax) continue;
+      }
+      return false; // 线段穿过膨胀后的障碍
     }
     return true;
   }
@@ -190,7 +237,7 @@ export class NavGrid {
       while (j > i + 1) {
         const a = this.worldToTile(path[i]);
         const b = this.worldToTile(path[j]);
-        if (this.lineClear(a.x, a.z, b.x, b.z)) break;
+        if (this.lineClear(a.x, a.z, b.x, b.z) && this.segmentClear(path[i], path[j])) break;
         j--;
       }
       out.push(path[j]);
@@ -313,7 +360,9 @@ function buildMap(def: MapDef): CompiledMap {
         walkable[z * def.w + x] = 1;
       }
     }
-  const nav = new NavGrid(def.w, def.h, walkable, def.tile);
+  // 只把墙体/木箱交给导航做避让检查（地面 brush 会挡住所有路径）
+  const blockers = brushes.filter((b) => b.max[1] > 0);
+  const nav = new NavGrid(def.w, def.h, walkable, def.tile, blockers);
 
   if (import.meta.env.DEV) {
     // eslint-disable-next-line no-console
