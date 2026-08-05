@@ -91,6 +91,7 @@ export class Bot {
   private guarding = false;
   private guardAngle = Math.random() * Math.PI * 2;
   private guardPos = new THREE.Vector3();
+  private holdYaw: number | null = null; // 到点后警戒方向（面向敌人来路/入口）
   private moveAlign = 1; // 身体朝向与移动方向的对齐度（用于卡住判定）
   private aimErrT = 0;
   private aimErrYaw = 0;
@@ -158,6 +159,7 @@ export class Bot {
     this.heardPos = null;
     this.detour = null;
     this.guarding = false;
+    this.holdYaw = null;
     this.moveAlign = 1;
     this.aimErrT = 0;
     this.aimErrYaw = 0;
@@ -425,9 +427,37 @@ export class Bot {
     this.move.update(h, wishX, wishZ, jump, false, false, this.weapon.def.moveSpeed);
       remaining -= h;
     }
+    // 到点持枪警戒：面向敌人来路（如 B 点唯一入口），不再随机乱转
+    if (!this.guarding) {
+      const finalPt = this.path.length ? this.path[this.path.length - 1] : null;
+      const arrived =
+        !!finalPt &&
+        this.pathIdx >= this.path.length - 1 &&
+        this.move.pos.distanceTo(finalPt) < 150;
+      if (arrived && !this.target && this.state === 'advance') {
+        if (this.holdYaw === null) {
+          const map = botWorldMap.get(this);
+          const enemySpawns = this.team === 'T' ? map?.spawns.ct : map?.spawns.t;
+          if (map && enemySpawns && enemySpawns.length) {
+            const avg = new THREE.Vector3();
+            for (const sp of enemySpawns) avg.add(sp);
+            avg.divideScalar(enemySpawns.length);
+            this.holdYaw = Math.atan2(avg.x - finalPt.x, avg.z - finalPt.z);
+          } else {
+            this.holdYaw = this.aimYaw;
+          }
+        }
+      } else {
+        this.holdYaw = null;
+      }
+    }
     // 站桩时缓慢扫视，避免漏看侧后方敌人
     if (hSpeed < 25 && this.state !== 'combat' && this.move.onGround) {
       this.aimYaw += Math.sin(performance.now() / 1000 * 0.7) * 0.3 * dt;
+    }
+    // 警戒中：视线收在入口方向（配合上面的缓慢扫视）
+    if (this.holdYaw !== null && !this.target && !this.guarding && this.state === 'advance') {
+      this.aimYaw = turnToward(this.aimYaw, this.holdYaw, 2.4 * dt);
     }
     // 守包：到了站位后面向包点外侧（敌人来路），配合上面的扫视
     if (this.guarding && !this.target && this.state === 'advance') {
@@ -579,7 +609,7 @@ export class Bot {
       this.detour.t -= dt;
       if (this.detour.t <= 0) this.detour = null;
     }
-    if (this.guarding) return; // 守包：固定站位，不随机游走
+    if (this.guarding || this.holdYaw !== null) return; // 守包/警戒：固定站位，不随机游走
     // 快到目标时加一点随机游走，避免扎堆
     if (this.path.length && this.pathIdx >= this.path.length - 1) {
       this.wanderT -= dt;
