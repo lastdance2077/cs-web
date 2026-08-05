@@ -6,7 +6,7 @@ import { buildWorldScene, createBombMesh } from './models';
 import { PlayerController, type InputState } from './player';
 import { Bot, attachBotWorldMap, type EnemyRef } from './bots';
 import { sfx } from './audio';
-import { NadeProjectile, NADES, NADE_TYPES, type Detonation, type NadeType } from './throwables';
+import { NadeProjectile, NADES, NADE_TYPES, simulateNadePath, type Detonation, type NadeType } from './throwables';
 
 export interface GameOptions {
   mapId: string;
@@ -73,8 +73,12 @@ export class Game {
   private spectateBot: Bot | null = null;
   private projectiles: NadeProjectile[] = [];
   private smokes: Array<{ pos: THREE.Vector3; radius: number; t: number; group: THREE.Group }> = [];
-  private fires: Array<{ pos: THREE.Vector3; radius: number; t: number; mesh: THREE.Mesh; tickT: number; light: THREE.PointLight; owner: string }> = [];
+  private fires: Array<{ pos: THREE.Vector3; radius: number; t: number; group: THREE.Group; flames: THREE.Mesh[]; disc: THREE.Mesh; tickT: number; light: THREE.PointLight; owner: string }> = [];
   private effects: Array<{ group: THREE.Group; t: number; max: number; light?: THREE.PointLight }> = [];
+  private embers: Array<{ mesh: THREE.Mesh; vel: THREE.Vector3; life: number }> = [];
+  private traj: THREE.Points | null = null;
+  private trajMarker: THREE.Mesh | null = null;
+  private dotTex: THREE.Texture | null = null;
   private nadeSelect: NadeType | null = null;
   private nadeCookT = 0;
   private prevFire = false;
@@ -230,12 +234,22 @@ export class Game {
     }
     this.smokes.length = 0;
     for (const f of this.fires) {
-      this.scene.remove(f.mesh);
+      this.scene.remove(f.group);
       this.scene.remove(f.light);
-      f.mesh.geometry.dispose();
-      (f.mesh.material as THREE.Material).dispose();
+      f.group.traverse((o) => {
+        const m = o as THREE.Mesh;
+        if (m.geometry) m.geometry.dispose();
+        if (m.material) (m.material as THREE.Material).dispose();
+      });
     }
     this.fires.length = 0;
+    for (const e of this.embers) {
+      this.scene.remove(e.mesh);
+      e.mesh.geometry.dispose();
+      (e.mesh.material as THREE.Material).dispose();
+    }
+    this.embers.length = 0;
+    this.clearTrajectory();
     for (const e of this.effects) {
       this.scene.remove(e.group);
       if (e.light) this.scene.remove(e.light);
@@ -486,7 +500,9 @@ export class Game {
     this.updateProjectiles(dt);
     this.updateSmokes(dt);
     this.updateFires(dt);
+    this.updateEmbers(dt);
     this.updateVisionOverlays(dt);
+    this.updateTrajectory();
     this.drawMinimap();
     this.updateHud(dt);
   }
@@ -1139,15 +1155,36 @@ export class Game {
 
   private spawnFire(pos: THREE.Vector3, owner: string) {
     const radius = NADES.molotov.radius;
-    const geo = new THREE.CylinderGeometry(radius * 0.55, radius * 0.72, 10, 24, 1, true);
-    const mat = new THREE.MeshBasicMaterial({ color: 0xff6a00, transparent: true, opacity: 0.72, side: THREE.DoubleSide, depthWrite: false });
-    const mesh = new THREE.Mesh(geo, mat);
-    mesh.position.set(pos.x, 4, pos.z);
-    this.scene.add(mesh);
+    const group = new THREE.Group();
+    // 地面火盘
+    const discMat = new THREE.MeshBasicMaterial({ color: 0xff5500, transparent: true, opacity: 0.65, side: THREE.DoubleSide, depthWrite: false });
+    const disc = new THREE.Mesh(new THREE.CircleGeometry(radius * 0.5, 24), discMat);
+    disc.rotation.x = -Math.PI / 2;
+    disc.position.y = 1.5;
+    group.add(disc);
+    // 一圈火舌（各自随机闪烁）+ 中央亮核
+    const flames: THREE.Mesh[] = [];
+    const flameMat = new THREE.MeshBasicMaterial({ color: 0xffa020, transparent: true, opacity: 0.85, depthWrite: false, blending: THREE.AdditiveBlending });
+    for (let i = 0; i < 7; i++) {
+      const ang = (i / 7) * Math.PI * 2 + Math.random() * 0.6;
+      const rr = radius * 0.2 * (0.6 + Math.random() * 0.7);
+      const h = 26 + Math.random() * 30;
+      const flame = new THREE.Mesh(new THREE.ConeGeometry(9 + Math.random() * 7, h, 6), flameMat);
+      flame.position.set(Math.cos(ang) * rr, h / 2, Math.sin(ang) * rr);
+      group.add(flame);
+      flames.push(flame);
+    }
+    const coreMat = new THREE.MeshBasicMaterial({ color: 0xffffa0, transparent: true, opacity: 0.9, depthWrite: false, blending: THREE.AdditiveBlending });
+    const core = new THREE.Mesh(new THREE.ConeGeometry(12, 40, 6), coreMat);
+    core.position.y = 20;
+    group.add(core);
+    flames.push(core);
+    group.position.set(pos.x, 2, pos.z);
+    this.scene.add(group);
     const light = new THREE.PointLight(0xff7a20, 1.3, 520, 2);
     light.position.set(pos.x, 60, pos.z);
     this.scene.add(light);
-    this.fires.push({ pos: pos.clone(), radius, t: 5, mesh, tickT: 0, light, owner });
+    this.fires.push({ pos: pos.clone(), radius, t: 5, group, flames, disc, tickT: 0, light, owner });
   }
 
   private updateSmokes(dt: number) {
@@ -1182,8 +1219,19 @@ export class Game {
       const f = this.fires[i];
       f.t -= dt;
       f.tickT -= dt;
-      (f.mesh.material as THREE.MeshBasicMaterial).opacity = 0.55 + Math.random() * 0.25;
-      f.light.intensity = 0.9 + Math.random() * 0.7;
+      const time = performance.now() / 1000;
+      // 火舌跳动
+      for (let k = 0; k < f.flames.length; k++) {
+        const fl = f.flames[k];
+        const ph = k * 1.7;
+        const s = 0.7 + Math.sin(time * 11 + ph) * 0.18 + Math.random() * 0.14;
+        fl.scale.set(s, 0.75 + Math.sin(time * 13 + ph) * 0.28 + Math.random() * 0.18, s);
+        (fl.material as THREE.MeshBasicMaterial).opacity = 0.55 + Math.random() * 0.4;
+      }
+      (f.disc.material as THREE.MeshBasicMaterial).opacity = 0.55 + Math.random() * 0.15;
+      f.light.intensity = 1.1 + Math.random() * 0.9;
+      // 上升火星
+      if (Math.random() < dt * 14) this.spawnEmber(f.pos, f.radius);
       if (f.tickT <= 0) {
         f.tickT = 0.25;
         const shooter = this.findCombatant(f.owner);
@@ -1196,13 +1244,114 @@ export class Game {
         }
       }
       if (f.t <= 0) {
-        this.scene.remove(f.mesh);
+        this.scene.remove(f.group);
         this.scene.remove(f.light);
-        f.mesh.geometry.dispose();
-        (f.mesh.material as THREE.Material).dispose();
+        f.group.traverse((o) => {
+          const m = o as THREE.Mesh;
+          if (m.geometry) m.geometry.dispose();
+          if (m.material) {
+            const mats = Array.isArray(m.material) ? m.material : [m.material];
+            for (const mm of mats) mm.dispose();
+          }
+        });
         this.fires.splice(i, 1);
       }
     }
+  }
+
+  private spawnEmber(pos: THREE.Vector3, radius: number) {
+    const mat = new THREE.MeshBasicMaterial({ color: 0xffaa33, transparent: true, opacity: 0.9, depthWrite: false });
+    const mesh = new THREE.Mesh(new THREE.SphereGeometry(2.2, 6, 6), mat);
+    const ang = Math.random() * Math.PI * 2;
+    const rr = Math.random() * radius * 0.38;
+    mesh.position.set(pos.x + Math.cos(ang) * rr, 5, pos.z + Math.sin(ang) * rr);
+    this.scene.add(mesh);
+    this.embers.push({
+      mesh,
+      vel: new THREE.Vector3((Math.random() - 0.5) * 45, 70 + Math.random() * 95, (Math.random() - 0.5) * 45),
+      life: 0.9,
+    });
+  }
+
+  private updateEmbers(dt: number) {
+    for (let i = this.embers.length - 1; i >= 0; i--) {
+      const e = this.embers[i];
+      e.life -= dt;
+      e.mesh.position.addScaledVector(e.vel, dt);
+      (e.mesh.material as THREE.MeshBasicMaterial).opacity = Math.max(0, e.life / 0.9);
+      if (e.life <= 0) {
+        this.scene.remove(e.mesh);
+        e.mesh.geometry.dispose();
+        (e.mesh.material as THREE.Material).dispose();
+        this.embers.splice(i, 1);
+      }
+    }
+  }
+
+  // 投掷轨迹预览：选中投掷物时显示虚线弧 + 落点
+  private updateTrajectory() {
+    const p = this.player;
+    if (!this.nadeSelect || !p.alive || this.phase !== 'live' || p.nades[this.nadeSelect] <= 0) {
+      this.clearTrajectory();
+      return;
+    }
+    const dir = new THREE.Vector3();
+    p.camera.getWorldDirection(dir);
+    const points = simulateNadePath(this.nadeSelect, p.eyePosition, dir, p.move.vel, this.nadeCookT, this.map.brushes);
+    if (points.length < 2) {
+      this.clearTrajectory();
+      return;
+    }
+    if (!this.traj) {
+      if (!this.dotTex) this.dotTex = this.makeDotTexture();
+      const geo = new THREE.BufferGeometry();
+      const mat = new THREE.PointsMaterial({ color: 0xffffff, size: 4.5, map: this.dotTex, transparent: true, opacity: 0.95, sizeAttenuation: true, depthWrite: false });
+      this.traj = new THREE.Points(geo, mat);
+      this.scene.add(this.traj);
+      this.trajMarker = new THREE.Mesh(
+        new THREE.SphereGeometry(5, 8, 8),
+        new THREE.MeshBasicMaterial({ color: 0xffd24a, transparent: true, opacity: 0.9, depthWrite: false }),
+      );
+      this.scene.add(this.trajMarker);
+    }
+    const positions = new Float32Array(points.length * 3);
+    for (let i = 0; i < points.length; i++) {
+      positions[i * 3] = points[i].x;
+      positions[i * 3 + 1] = points[i].y;
+      positions[i * 3 + 2] = points[i].z;
+    }
+    const g = this.traj.geometry as THREE.BufferGeometry;
+    g.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    g.setDrawRange(0, points.length);
+    this.trajMarker!.position.copy(points[points.length - 1]);
+  }
+
+  private clearTrajectory() {
+    if (this.traj) {
+      this.scene.remove(this.traj);
+      this.traj.geometry.dispose();
+      (this.traj.material as THREE.Material).dispose();
+      this.traj = null;
+    }
+    if (this.trajMarker) {
+      this.scene.remove(this.trajMarker);
+      this.trajMarker.geometry.dispose();
+      (this.trajMarker.material as THREE.Material).dispose();
+      this.trajMarker = null;
+    }
+  }
+
+  private makeDotTexture(): THREE.Texture {
+    const c = document.createElement('canvas');
+    c.width = 32;
+    c.height = 32;
+    const ctx = c.getContext('2d')!;
+    const grad = ctx.createRadialGradient(16, 16, 0, 16, 16, 16);
+    grad.addColorStop(0, 'rgba(255,255,255,1)');
+    grad.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, 32, 32);
+    return new THREE.CanvasTexture(c);
   }
 
   private updateVisionOverlays(dt: number) {
@@ -1904,6 +2053,7 @@ export class Game {
     document.removeEventListener('pointerlockchange', this.onLockChange);
     window.removeEventListener('resize', this.onResize);
     if (document.pointerLockElement) document.exitPointerLock();
+    this.clearTrajectory();
     this.hud.remove();
     this.scene.traverse((o) => {
       const mesh = o as THREE.Mesh;

@@ -146,3 +146,63 @@ export class NadeProjectile {
     }
   }
 }
+
+/**
+ * 预测投掷轨迹（用于预览线）：与 NadeProjectile 同一套物理，只算路径不产生效果。
+ * 高爆/闪光：引信走完或落地即止；烟雾：落地/空爆即止；燃烧瓶：撞到表面即止。
+ */
+export function simulateNadePath(
+  type: NadeType,
+  origin: THREE.Vector3,
+  dir: THREE.Vector3,
+  carryVel: THREE.Vector3,
+  cook: number,
+  brushes: Brush[],
+  dt = 0.045,
+  maxT = 2.8,
+): THREE.Vector3[] {
+  const points: THREE.Vector3[] = [];
+  const pos = origin.clone().addScaledVector(dir, 30);
+  const vel = carryVel.clone().multiplyScalar(0.35).addScaledVector(dir, THROW_SPEED);
+  vel.y += type === 'molotov' ? 120 : 90;
+  const d = NADES[type];
+  const fuse = Math.max(0.35, d.fuse - cook);
+  let t = 0;
+  let hitSurface = false;
+  points.push(pos.clone());
+  while (t < maxT && points.length < 110) {
+    t += dt;
+    vel.y -= FEEL.gravity * dt;
+    for (const axis of ['x', 'z', 'y'] as const) {
+      pos[axis] += vel[axis] * dt;
+      for (const b of brushes) {
+        const [bx0, by0, bz0] = b.min;
+        const [bx1, by1, bz1] = b.max;
+        if (!(pos.x + R > bx0 && pos.x - R < bx1 && pos.y + R > by0 && pos.y - R < by1 && pos.z + R > bz0 && pos.z - R < bz1)) continue;
+        if (axis === 'x') { pos.x = vel.x > 0 ? bx0 - R : bx1 + R; vel.x = -vel.x * BOUNCE; hitSurface = true; }
+        else if (axis === 'z') { pos.z = vel.z > 0 ? bz0 - R : bz1 + R; vel.z = -vel.z * BOUNCE; hitSurface = true; }
+        else { pos.y = vel.y < 0 ? by1 + R : by0 - R; vel.y = -vel.y * 0.3; hitSurface = true; }
+      }
+    }
+    if (Math.abs(pos.y) < 6 && vel.y <= 0) {
+      const s = Math.hypot(vel.x, vel.z);
+      if (s > 8) {
+        const k = Math.max(0, 1 - 2.6 * dt);
+        vel.x *= k;
+        vel.z *= k;
+      } else if (Math.abs(vel.y) < 1) {
+        hitSurface = true;
+      }
+    }
+    points.push(pos.clone());
+    if (type === 'molotov') {
+      if (t > 0.35 && hitSurface) break;
+      if (t > 4) break;
+    } else if (type === 'smoke') {
+      if (hitSurface || t >= d.fuse) break;
+    } else if (t >= fuse) {
+      break; // 高爆/闪光：引信到点
+    }
+  }
+  return points;
+}
