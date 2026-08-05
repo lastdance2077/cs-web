@@ -5,7 +5,8 @@ type SfxName =
   | 'headshot' | 'hitmarker' | 'kill' | 'death'
   | 'footstep' | 'jump' | 'reload' | 'buy'
   | 'plant' | 'defuse' | 'bomb_beep' | 'bomb_explode'
-  | 'round_start' | 'round_win' | 'round_lose' | 'hurt';
+  | 'round_start' | 'round_win' | 'round_lose' | 'hurt'
+  | 'nade_pull' | 'nade_throw' | 'nade_explode' | 'flash_pop' | 'smoke_pop' | 'fire';
 
 class SoundFX {
   private ctx: AudioContext | null = null;
@@ -158,6 +159,29 @@ class SoundFX {
         break;
       case 'hurt':
         this.tone({ freq: 200, endFreq: 80, dur: 0.15, gain: 0.3, type: 'sawtooth' });
+        break;
+      case 'nade_pull':
+        this.tone({ freq: 1400, endFreq: 900, dur: 0.1, gain: 0.12, type: 'square' });
+        break;
+      case 'nade_throw':
+        this.burst({ dur: 0.22, filter: 900, q: 0.6, gain: 0.22 });
+        break;
+      case 'nade_explode':
+        this.burst({ dur: 0.7, filter: 350, q: 0.3, gain: 0.8 });
+        this.burst({ dur: 0.35, filter: 90, q: 0.4, gain: 0.6 });
+        this.tone({ freq: 70, endFreq: 25, dur: 0.6, gain: 0.55, type: 'sawtooth' });
+        break;
+      case 'flash_pop':
+        this.burst({ dur: 0.35, filter: 2600, q: 0.8, gain: 0.5 });
+        this.tone({ freq: 900, endFreq: 2200, dur: 0.25, gain: 0.18, type: 'square' });
+        break;
+      case 'smoke_pop':
+        this.burst({ dur: 0.9, filter: 1800, q: 0.4, gain: 0.25 });
+        this.burst({ dur: 1.4, filter: 700, q: 0.5, gain: 0.18, delay: 0.1 });
+        break;
+      case 'fire':
+        this.burst({ dur: 0.5, filter: 500, q: 0.5, gain: 0.22 });
+        this.burst({ dur: 0.6, filter: 120, q: 0.6, gain: 0.18, delay: 0.2 });
         break;
     }
   }

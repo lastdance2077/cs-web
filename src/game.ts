@@ -6,6 +6,7 @@ import { buildWorldScene, createBombMesh } from './models';
 import { PlayerController, type InputState } from './player';
 import { Bot, attachBotWorldMap, type EnemyRef } from './bots';
 import { sfx } from './audio';
+import { NadeProjectile, NADES, NADE_TYPES, type Detonation, type NadeType } from './throwables';
 
 export interface GameOptions {
   mapId: string;
@@ -70,6 +71,18 @@ export class Game {
   private paused = false;
   private lastLockExit = 0;
   private spectateBot: Bot | null = null;
+  private projectiles: NadeProjectile[] = [];
+  private smokes: Array<{ pos: THREE.Vector3; radius: number; t: number; mesh: THREE.Mesh }> = [];
+  private fires: Array<{ pos: THREE.Vector3; radius: number; t: number; mesh: THREE.Mesh; tickT: number; light: THREE.PointLight; owner: string }> = [];
+  private effects: Array<{ mesh: THREE.Object3D; t: number; max: number; light?: THREE.PointLight }> = [];
+  private nadeSelect: NadeType | null = null;
+  private nadeCookT = 0;
+  private prevFire = false;
+  private prevSlot: 'primary' | 'secondary' | 'melee' = 'secondary';
+  private flashOverlay = 0;
+  private minimap!: HTMLCanvasElement;
+  private minimapCtx!: CanvasRenderingContext2D;
+  private minimapStatic!: HTMLCanvasElement;
   private raf = 0;
   private clock = new THREE.Clock();
   private disposed = false;
@@ -87,6 +100,11 @@ export class Game {
     money: null as unknown as HTMLDivElement,
     ammo: null as unknown as HTMLDivElement,
     weaponName: null as unknown as HTMLDivElement,
+    nadeHud: null as unknown as HTMLDivElement,
+    nadeCook: null as unknown as HTMLDivElement,
+    nadeCookBar: null as unknown as HTMLDivElement,
+    flashOverlay: null as unknown as HTMLDivElement,
+    smokeOverlay: null as unknown as HTMLDivElement,
     buyToast: null as unknown as HTMLDivElement,
     teamStatus: null as unknown as HTMLDivElement,
     scope: null as unknown as HTMLDivElement,
@@ -197,6 +215,29 @@ export class Game {
     this.buyAuto = true;
     this.buyOpen = false;
     this.el.buyMenu.style.display = 'none';
+    // 清空上一回合的投掷物/烟雾/火焰
+    this.nadeSelect = null;
+    this.nadeCookT = 0;
+    this.flashOverlay = 0;
+    this.projectiles.length = 0;
+    for (const s of this.smokes) {
+      this.scene.remove(s.mesh);
+      s.mesh.geometry.dispose();
+      (s.mesh.material as THREE.Material).dispose();
+    }
+    this.smokes.length = 0;
+    for (const f of this.fires) {
+      this.scene.remove(f.mesh);
+      this.scene.remove(f.light);
+      f.mesh.geometry.dispose();
+      (f.mesh.material as THREE.Material).dispose();
+    }
+    this.fires.length = 0;
+    for (const e of this.effects) {
+      this.scene.remove(e.mesh);
+      if (e.light) this.scene.remove(e.light);
+    }
+    this.effects.length = 0;
 
     // 玩家（换边时 CS:GO 规则不保留武器）
     const keepWeapons = this.player.alive && this.player.health > 0 && playerTeam === this.player.team;
@@ -368,6 +409,7 @@ export class Game {
       p.update(dt, this.input);
       this.handlePlayerShoot();
       this.handlePlayerInteract();
+      this.updateNades(dt);
     } else {
       // 死亡后进入队友视角（无队友时自由视角）
       this.updateSpectate(dt);
@@ -385,6 +427,7 @@ export class Game {
       bombDropped: this.bomb.dropped,
       noises: this.collectNoises(dt),
       time: this.roundT,
+      smokes: this.smokes.map((s) => ({ pos: s.pos, radius: s.radius })),
     };
 
     for (const bot of this.bots) {
@@ -398,6 +441,13 @@ export class Game {
       if (bot.actions.shot) {
         this.resolveShot(bot.actions.shot.origin, bot.actions.shot.dir, bot.team, bot);
         this.noiseEvents.push({ pos: bot.move.pos.clone(), radius: 2600 });
+      }
+      if (bot.actions.nade) {
+        const nd = bot.actions.nade;
+        this.projectiles.push(new NadeProjectile(nd.type, bot.team, bot.name, bot.eyePos, nd.dir, bot.move.vel, nd.cook));
+        sfx.play('nade_throw');
+        this.noiseEvents.push({ pos: bot.move.pos.clone(), radius: 1400 });
+        bot.actions.nade = null;
       }
       if (bot.actions.plant && bot.actions.plantProgress >= 1) this.doPlant(bot);
       if (bot.actions.defuse && bot.actions.defuseProgress >= 1) this.doDefuse();
@@ -430,6 +480,11 @@ export class Game {
 
     // ---- 特效 ----
     this.updateEffects(dt);
+    this.updateProjectiles(dt);
+    this.updateSmokes(dt);
+    this.updateFires(dt);
+    this.updateVisionOverlays(dt);
+    this.drawMinimap();
     this.updateHud(dt);
   }
 
@@ -546,6 +601,7 @@ export class Game {
       this.input.buy = false;
     }
     if (this.buyOpen) return; // 购买菜单打开时不能开火/换弹
+    if (this.nadeSelect) return; // 投掷物模式下不射击
     const dir = new THREE.Vector3();
     p.camera.getWorldDirection(dir);
     if (this.input.fire && p.alive && this.phase === 'live') {
@@ -926,6 +982,312 @@ export class Game {
   }
 
   // ============================================================
+  // 投掷物
+  // ============================================================
+
+  private updateProjectiles(dt: number) {
+    for (let i = this.projectiles.length - 1; i >= 0; i--) {
+      const det = this.projectiles[i].update(dt, this.map.brushes);
+      if (det) {
+        this.projectiles.splice(i, 1);
+        this.applyDetonation(det);
+      }
+    }
+  }
+
+  private applyDetonation(det: Detonation) {
+    const pos = det.pos;
+    const shooter = this.findCombatant(det.owner);
+    if (det.type === 'he') {
+      sfx.play('nade_explode');
+      this.spawnExplosion(pos, 0xff9a30);
+      this.noiseEvents.push({ pos: pos.clone(), radius: 3200 });
+      const radius = NADES.he.radius;
+      for (const t of this.allCombatants()) {
+        if (!t.alive) continue;
+        const d = t.move.pos.distanceTo(pos);
+        if (d > radius) continue;
+        const chest = new THREE.Vector3(t.move.pos.x, t.move.pos.y + 50, t.move.pos.z);
+        const dir = chest.clone().sub(pos).normalize();
+        const hit = MovementController.raycastBrushes(this.map.brushes, pos, dir, d);
+        if (hit < d - 20) continue; // 墙挡住
+        const dmg = Math.round(94 * Math.max(0.15, 1 - d / radius));
+        this.dealDamage(t, Math.max(1, dmg), shooter ?? this.player, false, chest);
+      }
+    } else if (det.type === 'flash') {
+      sfx.play('flash_pop');
+      this.spawnExplosion(pos, 0xfff6c8);
+      const radius = NADES.flash.radius;
+      for (const t of this.allCombatants()) {
+        if (!t.alive) continue;
+        const d = t.move.pos.distanceTo(pos);
+        if (d > radius) continue;
+        const eye = new THREE.Vector3(t.move.pos.x, t.move.pos.y + 60, t.move.pos.z);
+        const dir = eye.clone().sub(pos).normalize();
+        const hit = MovementController.raycastBrushes(this.map.brushes, pos, dir, d);
+        if (hit < d - 20) continue;
+        const strength = Math.max(0, 1 - d / radius);
+        if (t.isPlayer) this.flashOverlay = Math.max(this.flashOverlay, strength);
+        else (t as Bot).blindT = Math.max((t as Bot).blindT, strength * 2.6);
+      }
+    } else if (det.type === 'smoke') {
+      sfx.play('smoke_pop');
+      this.spawnSmoke(pos);
+      this.noiseEvents.push({ pos: pos.clone(), radius: 1000 });
+    } else if (det.type === 'molotov') {
+      sfx.play('fire');
+      this.spawnFire(pos, det.owner);
+      this.noiseEvents.push({ pos: pos.clone(), radius: 1400 });
+    }
+  }
+
+  private allCombatants(): Array<PlayerController | Bot> {
+    return [this.player, ...this.bots];
+  }
+
+  private findCombatant(name: string): PlayerController | Bot | null {
+    if (this.player.name === name) return this.player;
+    return this.bots.find((b) => b.name === name) ?? null;
+  }
+
+  private spawnExplosion(pos: THREE.Vector3, color: number) {
+    const geo = new THREE.SphereGeometry(NADES.he.radius * 0.22, 12, 10);
+    const mat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.9, depthWrite: false });
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.position.copy(pos);
+    this.scene.add(mesh);
+    const light = new THREE.PointLight(color, 3, 700, 2);
+    light.position.copy(pos);
+    this.scene.add(light);
+    this.effects.push({ mesh, t: 0, max: 0.38, light });
+  }
+
+  private spawnSmoke(pos: THREE.Vector3) {
+    const radius = NADES.smoke.radius;
+    const geo = new THREE.SphereGeometry(radius * 0.52, 14, 12);
+    const mat = new THREE.MeshLambertMaterial({ color: 0x9b9b9b, transparent: true, opacity: 0.38, depthWrite: false });
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.position.set(pos.x, 62, pos.z);
+    this.scene.add(mesh);
+    this.smokes.push({ pos: new THREE.Vector3(pos.x, 62, pos.z), radius, t: 16, mesh });
+  }
+
+  private spawnFire(pos: THREE.Vector3, owner: string) {
+    const radius = NADES.molotov.radius;
+    const geo = new THREE.CylinderGeometry(radius * 0.55, radius * 0.72, 10, 24, 1, true);
+    const mat = new THREE.MeshBasicMaterial({ color: 0xff6a00, transparent: true, opacity: 0.72, side: THREE.DoubleSide, depthWrite: false });
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.position.set(pos.x, 4, pos.z);
+    this.scene.add(mesh);
+    const light = new THREE.PointLight(0xff7a20, 1.3, 520, 2);
+    light.position.set(pos.x, 60, pos.z);
+    this.scene.add(light);
+    this.fires.push({ pos: pos.clone(), radius, t: 5, mesh, tickT: 0, light, owner });
+  }
+
+  private updateSmokes(dt: number) {
+    for (let i = this.smokes.length - 1; i >= 0; i--) {
+      const s = this.smokes[i];
+      s.t -= dt;
+      const mat = s.mesh.material as THREE.MeshLambertMaterial;
+      if (s.t < 3) mat.opacity = Math.max(0, s.t / 3) * 0.38;
+      if (s.t <= 0) {
+        this.scene.remove(s.mesh);
+        s.mesh.geometry.dispose();
+        mat.dispose();
+        this.smokes.splice(i, 1);
+      }
+    }
+  }
+
+  private updateFires(dt: number) {
+    for (let i = this.fires.length - 1; i >= 0; i--) {
+      const f = this.fires[i];
+      f.t -= dt;
+      f.tickT -= dt;
+      (f.mesh.material as THREE.MeshBasicMaterial).opacity = 0.55 + Math.random() * 0.25;
+      f.light.intensity = 0.9 + Math.random() * 0.7;
+      if (f.tickT <= 0) {
+        f.tickT = 0.25;
+        const shooter = this.findCombatant(f.owner);
+        for (const t of this.allCombatants()) {
+          if (!t.alive) continue;
+          const d = t.move.pos.distanceTo(f.pos);
+          if (d < f.radius * 0.55) {
+            this.dealDamage(t, 22, shooter ?? this.player, false, new THREE.Vector3(t.move.pos.x, t.move.pos.y + 30, t.move.pos.z));
+          }
+        }
+      }
+      if (f.t <= 0) {
+        this.scene.remove(f.mesh);
+        this.scene.remove(f.light);
+        f.mesh.geometry.dispose();
+        (f.mesh.material as THREE.Material).dispose();
+        this.fires.splice(i, 1);
+      }
+    }
+  }
+
+  private updateVisionOverlays(dt: number) {
+    this.flashOverlay = Math.max(0, this.flashOverlay - dt * 0.42);
+    this.el.flashOverlay.style.opacity = String(Math.min(1, this.flashOverlay * 1.2));
+    let smoke = 0;
+    const cam = this.player.camera.position;
+    for (const s of this.smokes) {
+      const d = cam.distanceTo(s.pos);
+      if (d < s.radius) smoke = Math.max(smoke, 1 - d / s.radius);
+    }
+    this.el.smokeOverlay.style.opacity = String(Math.min(0.65, smoke * 0.85));
+  }
+
+  private cycleNade() {
+    const p = this.player;
+    const owned = NADE_TYPES.filter((t) => p.nades[t] > 0);
+    if (!owned.length) {
+      this.buyToast('没有投掷物，开局按 B 购买');
+      return;
+    }
+    if (!this.nadeSelect) this.prevSlot = p.currentSlot;
+    const i = owned.indexOf(this.nadeSelect ?? owned[owned.length - 1]);
+    this.nadeSelect = owned[(i + 1) % owned.length];
+    this.nadeCookT = 0;
+    sfx.play('nade_pull');
+  }
+
+  private deselectNade() {
+    if (this.nadeSelect) {
+      this.nadeSelect = null;
+      this.nadeCookT = 0;
+    }
+  }
+
+  private updateNades(dt: number) {
+    const p = this.player;
+    if (this.nadeSelect && p.alive && this.phase === 'live') {
+      if (this.input.fire) this.nadeCookT = Math.min(1.6, this.nadeCookT + dt);
+      if (this.prevFire && !this.input.fire && this.nadeCookT > 0) {
+        this.throwNade(this.nadeSelect, this.nadeCookT);
+      }
+    }
+    this.prevFire = this.input.fire;
+  }
+
+  private throwNade(type: NadeType, cook: number) {
+    const p = this.player;
+    if (p.nades[type] <= 0) {
+      this.deselectNade();
+      return;
+    }
+    p.nades[type]--;
+    const dir = new THREE.Vector3();
+    p.camera.getWorldDirection(dir);
+    this.projectiles.push(new NadeProjectile(type, p.team, p.name, p.eyePosition, dir, p.move.vel, cook));
+    sfx.play('nade_throw');
+    this.noiseEvents.push({ pos: p.move.pos.clone(), radius: 1400 });
+    this.nadeCookT = 0;
+    this.deselectNade();
+    p.switchSlot(this.prevSlot);
+  }
+
+  // ============================================================
+  // 小地图
+  // ============================================================
+
+  private buildMinimap() {
+    const cw = 240;
+    const ch = Math.max(120, Math.round((240 * this.map.def.h) / this.map.def.w));
+    this.minimap.width = cw;
+    this.minimap.height = ch;
+    const st = document.createElement('canvas');
+    st.width = cw;
+    st.height = ch;
+    const sctx = st.getContext('2d')!;
+    const nav = this.map.nav;
+    const cw_ = cw / nav.w;
+    const ch_ = ch / nav.h;
+    sctx.fillStyle = '#131a22';
+    sctx.fillRect(0, 0, cw, ch);
+    for (let z = 0; z < nav.h; z++) {
+      for (let x = 0; x < nav.w; x++) {
+        if (!nav.isWalkable(x, z)) {
+          sctx.fillStyle = '#3a4452';
+          sctx.fillRect(x * cw_, z * ch_, cw_ + 0.5, ch_ + 0.5);
+        }
+      }
+    }
+    // 包点
+    for (const s of this.map.sites) {
+      const [x, y] = this.worldToMini(s.pos, cw, ch);
+      sctx.fillStyle = s.id === 'A' ? '#4caf50' : '#f2c14e';
+      sctx.fillRect(x - 6, y - 6, 12, 12);
+    }
+    // 出生点
+    for (const sp of this.map.spawns.t) {
+      const [x, y] = this.worldToMini(sp, cw, ch);
+      sctx.fillStyle = '#c9a24b';
+      sctx.beginPath();
+      sctx.arc(x, y, 3, 0, Math.PI * 2);
+      sctx.fill();
+    }
+    for (const sp of this.map.spawns.ct) {
+      const [x, y] = this.worldToMini(sp, cw, ch);
+      sctx.fillStyle = '#4a9be0';
+      sctx.beginPath();
+      sctx.arc(x, y, 3, 0, Math.PI * 2);
+      sctx.fill();
+    }
+    this.minimapStatic = st;
+  }
+
+  private worldToMini(p: THREE.Vector3, cw = this.minimap.width, ch = this.minimap.height): [number, number] {
+    const w = this.map.def.w * this.map.def.tile;
+    const h = this.map.def.h * this.map.def.tile;
+    return [(p.x / w + 0.5) * cw, (p.z / h + 0.5) * ch];
+  }
+
+  private drawMinimap() {
+    const ctx = this.minimapCtx;
+    const cw = this.minimap.width;
+    const ch = this.minimap.height;
+    ctx.clearRect(0, 0, cw, ch);
+    ctx.drawImage(this.minimapStatic, 0, 0);
+    const p = this.player;
+    // 队友
+    for (const b of this.bots) {
+      if (!b.alive || b.team !== p.team) continue;
+      const [x, y] = this.worldToMini(b.move.pos);
+      ctx.fillStyle = b.team === 'T' ? '#e0b44a' : '#4a9be0';
+      ctx.beginPath();
+      ctx.arc(x, y, 3, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    // 炸弹（已安装/掉落）
+    const bombPos = this.bomb.planted ? this.bomb.pos : this.bomb.dropped;
+    if (bombPos) {
+      const [x, y] = this.worldToMini(bombPos);
+      ctx.fillStyle = '#ff4d4f';
+      ctx.beginPath();
+      ctx.arc(x, y, 3.5 + Math.sin(performance.now() / 180) * 1.2, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    // 玩家箭头
+    if (p.alive) {
+      const [x, y] = this.worldToMini(p.move.pos);
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(p.yaw);
+      ctx.fillStyle = '#ffffff';
+      ctx.beginPath();
+      ctx.moveTo(0, -7);
+      ctx.lineTo(4.5, 5);
+      ctx.lineTo(-4.5, 5);
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+    }
+  }
+
+  // ============================================================
   // HUD
   // ============================================================
 
@@ -958,9 +1320,14 @@ export class Game {
         <div id="ammo">12 / 24</div>
         <div id="weapon-name">USP</div>
       </div>
+      <div id="nade-hud"></div>
+      <div id="nade-cook"><div id="nade-cook-bar"></div></div>
       <div id="buy-toast"></div>
       <div id="interact-hint"></div>
       <div id="progress"><div id="progress-bar"></div></div>
+      <canvas id="minimap"></canvas>
+      <div id="flash-overlay"></div>
+      <div id="smoke-overlay"></div>
       <div id="banner"><div id="banner-title"></div><div id="banner-sub"></div></div>
       <div id="damage-vignette"></div>
       <div id="hitmarker"></div>
@@ -993,6 +1360,14 @@ export class Game {
     this.el.money = $('#money');
     this.el.ammo = $('#ammo');
     this.el.weaponName = $('#weapon-name');
+    this.el.nadeHud = $('#nade-hud');
+    this.el.nadeCook = $('#nade-cook');
+    this.el.nadeCookBar = $('#nade-cook-bar');
+    this.el.flashOverlay = $('#flash-overlay');
+    this.el.smokeOverlay = $('#smoke-overlay');
+    this.minimap = $('#minimap') as unknown as HTMLCanvasElement;
+    this.minimapCtx = this.minimap.getContext('2d')!;
+    this.buildMinimap();
     this.el.buyToast = $('#buy-toast');
     this.el.teamStatus = $('#team-status');
     this.el.scope = $('#scope-overlay');
@@ -1034,8 +1409,23 @@ export class Game {
     this.el.armor.textContent = String(Math.max(0, Math.ceil(p.armor)));
     this.el.money.textContent = '$' + p.money;
     const w = p.weapon;
-    this.el.ammo.textContent = w.isKnife ? '∞' : `${w.ammoInMag} / ${w.reserve}`;
-    this.el.weaponName.textContent = w.def.name;
+    if (this.nadeSelect) {
+      const nd = NADES[this.nadeSelect];
+      this.el.ammo.textContent = `×${p.nades[this.nadeSelect]}`;
+      this.el.weaponName.textContent = `${nd.name} · 按住左键蓄力，松手投掷`;
+    } else {
+      this.el.ammo.textContent = w.isKnife ? '∞' : `${w.ammoInMag} / ${w.reserve}`;
+      this.el.weaponName.textContent = w.def.name;
+    }
+    // 投掷物计数
+    this.el.nadeHud.textContent =
+      `G 投掷物｜高爆×${p.nades.he} 闪光×${p.nades.flash} 烟×${p.nades.smoke} 火×${p.nades.molotov}`;
+    // 蓄力条
+    const cooking = !!this.nadeSelect && this.input.fire;
+    this.el.nadeCook.style.display = cooking ? 'block' : 'none';
+    if (cooking) {
+      this.el.nadeCookBar.style.width = `${Math.min(100, (this.nadeCookT / 1.6) * 100)}%`;
+    }
     this.el.bombIcon.classList.toggle('hidden', !p.hasBomb);
 
     // 双方存活状态（顶部）
@@ -1145,18 +1535,25 @@ export class Game {
       { id: 'awp', name: 'AWP', price: 4750, desc: '重型狙击' },
       { id: 'armor', name: '防弹衣+头盔', price: 1000, desc: '降低所受伤害' },
       ...(p.team === 'CT' ? [{ id: 'kit', name: '拆弹钳', price: 400, desc: '拆弹时间减半' }] : []),
+      { id: 'he', name: '高爆手雷', price: 300, desc: '范围伤害' },
+      { id: 'flash', name: '闪光弹', price: 200, desc: '致盲敌人' },
+      { id: 'smoke', name: '烟雾弹', price: 300, desc: '遮挡视线' },
+      { id: 'molotov', name: '燃烧瓶', price: 400, desc: '封锁区域' },
     ];
     this.buyList = items;
     const money = p.money;
     this.el.buyItems.innerHTML = items
-      .map(
-        (it, i) => `
-        <div class="buy-item ${it.price > money ? 'disabled' : ''}" data-buy="${it.id}">
+      .map((it, i) => {
+        const nadeDef = NADES[it.id as NadeType];
+        const ownedFull = nadeDef ? p.nades[it.id as NadeType] >= nadeDef.max : false;
+        const disabled = it.price > money || ownedFull;
+        return `
+        <div class="buy-item ${disabled ? 'disabled' : ''}" data-buy="${it.id}">
           <div class="buy-name"><span class="buy-key">${i + 1}</span>${it.name}</div>
           <div class="buy-desc">${it.desc}</div>
-          <div class="buy-price">${it.price === 0 ? '免费' : '$' + it.price}${it.price > money ? ' <span class="lack">余额不足</span>' : ''}</div>
-        </div>`,
-      )
+          <div class="buy-price">${it.price === 0 ? '免费' : '$' + it.price}${it.price > money ? ' <span class="lack">余额不足</span>' : ownedFull ? ' <span class="lack">已带满</span>' : ''}</div>
+        </div>`;
+      })
       .join('');
     this.el.buyMenu.style.display = 'flex';
     this.el.buyMoney.textContent = '余额 $' + p.money;
@@ -1206,6 +1603,25 @@ export class Game {
       } else {
         this.buyToast(p.money < 400 ? '余额不足，需要 $400' : '已有拆弹钳');
       }
+      return;
+    }
+    const nadeDef = NADES[id as NadeType];
+    if (nadeDef) {
+      const key = id as NadeType;
+      if (p.nades[key] >= nadeDef.max) {
+        this.buyToast('该投掷物已带满');
+        return;
+      }
+      if (p.money < nadeDef.price) {
+        this.buyToast(`余额不足，需要 $${nadeDef.price}`);
+        return;
+      }
+      p.money -= nadeDef.price;
+      p.nades[key]++;
+      sfx.play('buy');
+      this.buyToast(`已购买 ${nadeDef.name}`);
+      this.buyAuto = false;
+      this.closeBuyMenu();
       return;
     }
     const def = WEAPONS[id];
@@ -1318,9 +1734,10 @@ export class Game {
     if (e.code === 'KeyE') this.input.interact = true;
     if (e.code === 'KeyR') this.input.reload = true;
     if (e.code === 'KeyB') this.input.buy = true;
-    if (e.code === 'Digit1') this.input.slot = 1;
-    if (e.code === 'Digit2') this.input.slot = 2;
-    if (e.code === 'Digit3') this.input.slot = 3;
+    if (e.code === 'KeyG') this.cycleNade();
+    if (e.code === 'Digit1') { this.input.slot = 1; this.deselectNade(); }
+    if (e.code === 'Digit2') { this.input.slot = 2; this.deselectNade(); }
+    if (e.code === 'Digit3') { this.input.slot = 3; this.deselectNade(); }
     if (e.code === 'KeyM') sfx.setMuted(!sfx.muted);
     if (e.code === 'Escape' && performance.now() - this.lastLockExit > 200) {
       this.togglePause();
@@ -1342,6 +1759,7 @@ export class Game {
   private onWheel = (e: WheelEvent) => {
     e.preventDefault();
     this.input.wheel += e.deltaY > 0 ? 1 : -1;
+    this.deselectNade();
   };
 
   private onCanvasClick = () => {

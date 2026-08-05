@@ -5,6 +5,7 @@ import { createBotModel, poseArm, type BotModel } from './models';
 import { WeaponSystem } from './weapons';
 import type { CompiledMap, MapSite } from './maps';
 import { sfx } from './audio';
+import { NADES, type NadeType } from './throwables';
 
 export interface EnemyRef {
   pos: THREE.Vector3;
@@ -26,6 +27,7 @@ export interface BotWorld {
   bombTimeLeft: number;
   bombDropped: THREE.Vector3 | null;
   noises: NoiseEvent[];
+  smokes: Array<{ pos: THREE.Vector3; radius: number }>;
   time: number;
 }
 
@@ -35,6 +37,7 @@ export interface BotActions {
   defuse: boolean;
   defuseProgress: number;
   shot: { origin: THREE.Vector3; dir: THREE.Vector3 } | null;
+  nade: { type: NadeType; dir: THREE.Vector3; cook: number } | null;
 }
 
 export class Bot {
@@ -51,6 +54,7 @@ export class Bot {
   health = 100;
   armor = 0;
   money = 4000;
+  nades: Record<NadeType, number> = { he: 0, flash: 0, smoke: 0, molotov: 0 };
   alive = true;
   hasBomb = false;
   hasKit = false;
@@ -73,6 +77,8 @@ export class Bot {
   private burstT = 0;
   private strafeDir = 1;
   private strafeT = 0;
+  private nadeCdT = 0;
+  blindT = 0;
   private seenT = -999;
   private lastSeenPos = new THREE.Vector3();
   private heardPos: THREE.Vector3 | null = null;
@@ -93,6 +99,7 @@ export class Bot {
     defuse: false,
     defuseProgress: 0,
     shot: null,
+    nade: null,
   };
 
   constructor(name: string, team: Team, diff: BotDifficulty, brushes: Brush[]) {
@@ -147,6 +154,9 @@ export class Bot {
     this.aimErrT = 0;
     this.aimErrYaw = 0;
     this.aimErrPitch = 0;
+    this.nades = { he: 0, flash: 0, smoke: 0, molotov: 0 };
+    this.blindT = 0;
+    this.nadeCdT = 0;
     this.money = money;
     this.deathT = 0;
     this.model.group.rotation.set(0, 0, 0);
@@ -185,6 +195,15 @@ export class Bot {
     if (this.team === 'CT' && this.role === 'bomb' && this.money >= 400) {
       this.hasKit = true;
       this.money -= 400;
+    }
+    // 投掷物：优先高爆，其次闪光/烟雾
+    const nadeOrder: NadeType[] = ['he', 'flash', 'smoke'];
+    for (const id of nadeOrder) {
+      const d = NADES[id];
+      if (this.money >= d.price && this.nades[id] < d.max) {
+        this.nades[id]++;
+        this.money -= d.price;
+      }
     }
   }
 
@@ -236,6 +255,9 @@ export class Bot {
     this.actions.plant = false;
     this.actions.defuse = false;
     this.actions.shot = null;
+    this.actions.nade = null;
+    this.blindT = Math.max(0, this.blindT - dt);
+    this.nadeCdT -= dt;
     if (!this.alive) {
       this.deathT += dt;
       // 倒地动画：缓缓倒下并下沉
@@ -268,7 +290,8 @@ export class Bot {
     this.burstT -= dt;
     this.investigateT -= dt;
 
-    const visible = this.findVisible(enemies, world);
+    // 被闪光致盲时看不见敌人
+    const visible = this.blindT > 0 ? null : this.findVisible(enemies, world);
     if (visible) {
       this.target = visible;
       this.reactionT -= dt;
@@ -436,6 +459,15 @@ export class Bot {
       // LOS
       const hit = MovementController.raycastBrushes(world.brushes, eye, dir, dist + 10);
       if (hit <= dist - 6) continue;
+      // 烟雾遮挡视线
+      let inSmoke = false;
+      for (const s of world.smokes) {
+        if (distToSegment(s.pos, eye, new THREE.Vector3(e.pos.x, e.pos.y + 50, e.pos.z)) < s.radius * 0.5) {
+          inSmoke = true;
+          break;
+        }
+      }
+      if (inSmoke) continue;
       const score = dist - flatDir.dot(fwd) * 200; // 更近、更居中者优先
       if (score < bestScore) {
         bestScore = score;
@@ -668,6 +700,19 @@ export class Bot {
       }
     }
 
+    // 投掷物：远距离丢高爆，近距补闪光
+    if (this.nadeCdT <= 0 && this.actions.nade === null && !this.weapon.isKnife) {
+      const canHe = this.nades.he > 0 && dist > 260 && dist < 1500;
+      const canFlash = this.nades.flash > 0 && dist > 120 && dist < 650;
+      if (canHe || canFlash) {
+        const type: NadeType = canHe && (!canFlash || Math.random() < 0.65) ? 'he' : 'flash';
+        this.nades[type]--;
+        this.nadeCdT = 6 + Math.random() * 4;
+        const lead = new THREE.Vector3().copy(t.pos).addScaledVector(t.vel, dist / 750).add(new THREE.Vector3(0, 40, 0));
+        const throwDir = lead.clone().sub(eye).normalize();
+        this.actions.nade = { type, dir: throwDir, cook: Math.random() * 0.7 };
+      }
+    }
     // 被打后转身寻找
     if (world.time - this.seenT > 2.5 && !this.target?.alive) {
       this.aimYaw += Math.sin(world.time * 2) * 0.2;
@@ -710,4 +755,16 @@ function turnToward(current: number, target: number, maxDelta: number) {
 
 function clamp(v: number, min: number, max: number) {
   return Math.max(min, Math.min(max, v));
+}
+
+/** 点到线段的最短距离 */
+function distToSegment(p: THREE.Vector3, a: THREE.Vector3, b: THREE.Vector3): number {
+  const abx = b.x - a.x;
+  const aby = b.y - a.y;
+  const abz = b.z - a.z;
+  const len2 = abx * abx + aby * aby + abz * abz;
+  if (len2 < 1e-6) return p.distanceTo(a);
+  let t = ((p.x - a.x) * abx + (p.y - a.y) * aby + (p.z - a.z) * abz) / len2;
+  t = Math.max(0, Math.min(1, t));
+  return Math.hypot(p.x - (a.x + abx * t), p.y - (a.y + aby * t), p.z - (a.z + abz * t));
 }

@@ -4,6 +4,7 @@ import { MovementController } from './movement';
 import { createViewmodel, createPlayerHitboxes, muzzleOffset, type HitBox } from './models';
 import { WeaponSystem } from './weapons';
 import { sfx } from './audio';
+import { type NadeType } from './throwables';
 
 export interface InputState {
   keys: Set<string>;
@@ -32,6 +33,7 @@ export class PlayerController {
   health = 100;
   armor = 100;
   money = 4000;
+  nades: Record<NadeType, number> = { he: 0, flash: 0, smoke: 0, molotov: 0 };
   alive = true;
   hasBomb = false;
   hasKit = false;
@@ -105,6 +107,7 @@ export class PlayerController {
     this.pitch = 0;
     this.viewPunchX = 0;
     this.viewPunchY = 0;
+    this.nades = { he: 0, flash: 0, smoke: 0, molotov: 0 };
     if (!keepWeapons) {
       this.weapons.clear();
       this.weapons.set('knife', new WeaponSystem('knife'));
