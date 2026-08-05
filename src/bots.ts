@@ -88,6 +88,10 @@ export class Bot {
   private wanderOffset = new THREE.Vector3();
   private stuckT = 0;
   private detour: { pos: THREE.Vector3; t: number } | null = null;
+  private guarding = false;
+  private guardAngle = Math.random() * Math.PI * 2;
+  private guardPos = new THREE.Vector3();
+  private moveAlign = 1; // 身体朝向与移动方向的对齐度（用于卡住判定）
   private aimErrT = 0;
   private aimErrYaw = 0;
   private aimErrPitch = 0;
@@ -153,6 +157,8 @@ export class Bot {
     this.interact = null;
     this.heardPos = null;
     this.detour = null;
+    this.guarding = false;
+    this.moveAlign = 1;
     this.aimErrT = 0;
     this.aimErrYaw = 0;
     this.aimErrPitch = 0;
@@ -322,9 +328,10 @@ export class Bot {
     if (this.target && this.reactionT <= 0 && !(isCarrier && distToTarget > 380)) {
       this.state = 'combat';
     } else if (this.team === 'T' && world.bombPlanted) {
-      this.state = 'advance'; // 回防炸弹
+      this.state = 'advance'; // 守包：散开到包点四周，面向敌人来路
       this.role = 'bomb';
-      this.setTarget(world.bombPos);
+      this.beginGuard(world);
+      this.setTarget(this.guardPos);
     } else if (this.team === 'CT' && world.bombPlanted) {
       this.state = 'advance';
       this.role = 'bomb';
@@ -378,11 +385,18 @@ export class Bot {
       // 朝移动方向转向，保证前进时面向敌人可能出现的方位
       if (wishX !== 0 || wishZ !== 0) {
         this.aimYaw = turnToward(this.aimYaw, Math.atan2(wishX, wishZ), 2.4 * dt);
+        // 身体没转过来之前放慢脚步：先转身再跑，避免“边跑边转头”的抖动感
+        const ax = Math.sin(this.aimYaw);
+        const az = Math.cos(this.aimYaw);
+        this.moveAlign = Math.max(0, ax * wishX + az * wishZ);
+        const slow = 0.3 + 0.7 * this.moveAlign;
+        wishX *= slow;
+        wishZ *= slow;
       }
     }
 
-    // 卡住检测：有路要走但 1 秒几乎没动 → 强制重新寻路
-    if (this.state === 'advance' && this.path.length > 1) {
+    // 卡住检测：已经面向目标却走不动（避免把“原地转身”误判成卡住）
+    if (this.state === 'advance' && this.path.length > 1 && this.moveAlign > 0.7) {
       if (Math.hypot(this.move.vel.x, this.move.vel.z) < 25) {
         this.stuckT += dt;
         if (this.stuckT > 1.0) {
@@ -414,6 +428,14 @@ export class Bot {
     // 站桩时缓慢扫视，避免漏看侧后方敌人
     if (hSpeed < 25 && this.state !== 'combat' && this.move.onGround) {
       this.aimYaw += Math.sin(performance.now() / 1000 * 0.7) * 0.3 * dt;
+    }
+    // 守包：到了站位后面向包点外侧（敌人来路），配合上面的扫视
+    if (this.guarding && !this.target && this.state === 'advance') {
+      const dx = this.move.pos.x - world.bombPos.x;
+      const dz = this.move.pos.z - world.bombPos.z;
+      if (Math.hypot(dx, dz) > 40) {
+        this.aimYaw = turnToward(this.aimYaw, Math.atan2(dx, dz), 2.4 * dt);
+      }
     }
     this.model.group.position.set(this.move.pos.x, this.move.pos.y, this.move.pos.z);
     this.model.group.rotation.y = this.aimYaw;
@@ -557,6 +579,7 @@ export class Bot {
       this.detour.t -= dt;
       if (this.detour.t <= 0) this.detour = null;
     }
+    if (this.guarding) return; // 守包：固定站位，不随机游走
     // 快到目标时加一点随机游走，避免扎堆
     if (this.path.length && this.pathIdx >= this.path.length - 1) {
       this.wanderT -= dt;
@@ -568,6 +591,42 @@ export class Bot {
         this.wanderOffset.set(Math.sin(ang) * dist, 0, Math.cos(ang) * dist);
       }
     }
+  }
+
+  /** 开始守包：确定一个散开站位（包点四周一圈，彼此不重叠） */
+  private beginGuard(world: BotWorld) {
+    if (this.guarding) return;
+    this.guarding = true;
+    this.guardPos.copy(this.pickGuardPos(world));
+  }
+
+  private pickGuardPos(world: BotWorld): THREE.Vector3 {
+    const map = botWorldMap.get(this);
+    const nav = map?.nav;
+    const bomb = world.bombPos;
+    if (!map || !nav || !map.spawns.t.length) return bomb.clone();
+    // 从 T 出生指向包点的方向为基准，绕包点一圈按各自角度散开
+    const tAvg = new THREE.Vector3();
+    for (const s of map.spawns.t) tAvg.add(s);
+    tAvg.divideScalar(map.spawns.t.length);
+    const base = bomb.clone().sub(tAvg);
+    base.y = 0;
+    if (base.lengthSq() < 1) base.set(1, 0, 0);
+    base.normalize();
+    const c = Math.cos(this.guardAngle);
+    const s = Math.sin(this.guardAngle);
+    const off = new THREE.Vector3(base.x * c - base.z * s, 0, base.x * s + base.z * c);
+    // 在环形上试几个点，选最近的可走点（避免 nearestWalkable 吸附到远处）
+    for (let k = 0; k < 8; k++) {
+      const ang = this.guardAngle + (Math.random() - 0.5) * 0.9;
+      const ca = Math.cos(ang);
+      const sa = Math.sin(ang);
+      const o = new THREE.Vector3(base.x * ca - base.z * sa, 0, base.x * sa + base.z * ca);
+      const cand = bomb.clone().addScaledVector(o, 175 + Math.random() * 85);
+      const tile = nav.worldToTile(cand);
+      if (nav.isWalkable(tile.x, tile.z)) return cand;
+    }
+    return bomb.clone(); // 周围实在没空地就贴着包点守
   }
 
   /** 卡住时选一个附近可走、直线不撞墙的点作为临时脱困目标 */

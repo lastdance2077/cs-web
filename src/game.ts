@@ -574,7 +574,8 @@ export class Game {
       this.spectateBot = mates[0];
     }
     const cam = this.player.camera;
-    cam.position.copy(this.spectateBot.eyePos);
+    // 位置平滑跟随，避免把 Bot 跑动/拉扯的微抖动原样搬过来
+    cam.position.lerp(this.spectateBot.eyePos, Math.min(1, dt * 12));
     cam.rotation.order = 'YXZ';
     // 平滑跟随视线：限速缓动，避免把 Bot 的快速转向/抖动原样抖出来
     const targetYaw = this.spectateBot.viewYaw;
@@ -582,9 +583,9 @@ export class Game {
     let dy = targetYaw - cam.rotation.y;
     while (dy > Math.PI) dy -= Math.PI * 2;
     while (dy < -Math.PI) dy += Math.PI * 2;
-    const yawRate = 3.2;
+    const yawRate = 2.2;
     cam.rotation.y += Math.max(-yawRate * dt, Math.min(yawRate * dt, dy));
-    const pitchRate = 2.2;
+    const pitchRate = 1.8;
     const dp = targetPitch - cam.rotation.x;
     cam.rotation.x += Math.max(-pitchRate * dt, Math.min(pitchRate * dt, dp));
     cam.rotation.z = 0;
