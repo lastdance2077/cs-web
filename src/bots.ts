@@ -91,6 +91,8 @@ export class Bot {
   private aimErrT = 0;
   private aimErrYaw = 0;
   private aimErrPitch = 0;
+  private aimErrTargetYaw = 0;
+  private aimErrTargetPitch = 0;
   private deathT = 0;
   private interact: { type: 'plant' | 'defuse'; t: number; total: number } | null = null;
   actions: BotActions = {
@@ -154,6 +156,8 @@ export class Bot {
     this.aimErrT = 0;
     this.aimErrYaw = 0;
     this.aimErrPitch = 0;
+    this.aimErrTargetYaw = 0;
+    this.aimErrTargetPitch = 0;
     this.nades = { he: 0, flash: 0, smoke: 0, molotov: 0 };
     this.blindT = 0;
     this.nadeCdT = 0;
@@ -373,7 +377,7 @@ export class Bot {
       wishZ = dir.z;
       // 朝移动方向转向，保证前进时面向敌人可能出现的方位
       if (wishX !== 0 || wishZ !== 0) {
-        this.aimYaw = turnToward(this.aimYaw, Math.atan2(wishX, wishZ), 5 * dt);
+        this.aimYaw = turnToward(this.aimYaw, Math.atan2(wishX, wishZ), 2.4 * dt);
       }
     }
 
@@ -558,7 +562,10 @@ export class Bot {
       this.wanderT -= dt;
       if (this.wanderT <= 0) {
         this.wanderT = 1.5 + Math.random() * 2;
-        this.wanderOffset.set((Math.random() - 0.5) * 180, 0, (Math.random() - 0.5) * 180);
+        // 游走点尽量落在面前 ±50°，避免随机偏移突然指到身后导致急甩头
+        const ang = this.aimYaw + (Math.random() - 0.5) * 1.7;
+        const dist = 45 + Math.random() * 130;
+        this.wanderOffset.set(Math.sin(ang) * dist, 0, Math.cos(ang) * dist);
       }
     }
   }
@@ -637,13 +644,16 @@ export class Bot {
     const flat = Math.hypot(aim.x - eye.x, aim.z - eye.z);
     const targetPitch = Math.atan2(aim.y - eye.y, flat);
 
-    // 带误差缓慢转向：误差偏移每隔一小段重新取，避免每帧白噪声导致观战镜头狂抖
+    // 带误差缓慢转向：误差偏移每隔一小段重新取，且新误差平滑过渡，避免镜头突然左右甩
     this.aimErrT -= dt;
     if (this.aimErrT <= 0) {
-      this.aimErrT = 0.2 + Math.random() * 0.35;
-      this.aimErrYaw = (Math.random() - 0.5) * 2 * this.diff.aimError;
-      this.aimErrPitch = (Math.random() - 0.5) * 2 * this.diff.aimError;
+      this.aimErrT = 0.35 + Math.random() * 0.5;
+      this.aimErrTargetYaw = (Math.random() - 0.5) * 2 * this.diff.aimError;
+      this.aimErrTargetPitch = (Math.random() - 0.5) * 2 * this.diff.aimError;
     }
+    const errBlend = Math.min(1, dt * 3.2);
+    this.aimErrYaw += (this.aimErrTargetYaw - this.aimErrYaw) * errBlend;
+    this.aimErrPitch += (this.aimErrTargetPitch - this.aimErrPitch) * errBlend;
     const maxTurn = this.diff.aimTurnSpeed * dt;
     const dy = wrapAngle(targetYaw + this.aimErrYaw - this.aimYaw);
     this.aimYaw += Math.max(-maxTurn, Math.min(maxTurn, dy));

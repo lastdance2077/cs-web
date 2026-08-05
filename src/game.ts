@@ -72,9 +72,9 @@ export class Game {
   private lastLockExit = 0;
   private spectateBot: Bot | null = null;
   private projectiles: NadeProjectile[] = [];
-  private smokes: Array<{ pos: THREE.Vector3; radius: number; t: number; mesh: THREE.Mesh }> = [];
+  private smokes: Array<{ pos: THREE.Vector3; radius: number; t: number; group: THREE.Group }> = [];
   private fires: Array<{ pos: THREE.Vector3; radius: number; t: number; mesh: THREE.Mesh; tickT: number; light: THREE.PointLight; owner: string }> = [];
-  private effects: Array<{ mesh: THREE.Object3D; t: number; max: number; light?: THREE.PointLight }> = [];
+  private effects: Array<{ group: THREE.Group; t: number; max: number; light?: THREE.PointLight }> = [];
   private nadeSelect: NadeType | null = null;
   private nadeCookT = 0;
   private prevFire = false;
@@ -221,9 +221,12 @@ export class Game {
     this.flashOverlay = 0;
     this.projectiles.length = 0;
     for (const s of this.smokes) {
-      this.scene.remove(s.mesh);
-      s.mesh.geometry.dispose();
-      (s.mesh.material as THREE.Material).dispose();
+      this.scene.remove(s.group);
+      s.group.traverse((o) => {
+        const m = o as THREE.Mesh;
+        if (m.geometry) m.geometry.dispose();
+        if (m.material) (m.material as THREE.Material).dispose();
+      });
     }
     this.smokes.length = 0;
     for (const f of this.fires) {
@@ -234,7 +237,7 @@ export class Game {
     }
     this.fires.length = 0;
     for (const e of this.effects) {
-      this.scene.remove(e.mesh);
+      this.scene.remove(e.group);
       if (e.light) this.scene.remove(e.light);
     }
     this.effects.length = 0;
@@ -557,8 +560,17 @@ export class Game {
     const cam = this.player.camera;
     cam.position.copy(this.spectateBot.eyePos);
     cam.rotation.order = 'YXZ';
-    cam.rotation.y = this.spectateBot.viewYaw;
-    cam.rotation.x = this.spectateBot.viewPitch;
+    // 平滑跟随视线：限速缓动，避免把 Bot 的快速转向/抖动原样抖出来
+    const targetYaw = this.spectateBot.viewYaw;
+    const targetPitch = this.spectateBot.viewPitch;
+    let dy = targetYaw - cam.rotation.y;
+    while (dy > Math.PI) dy -= Math.PI * 2;
+    while (dy < -Math.PI) dy += Math.PI * 2;
+    const yawRate = 3.2;
+    cam.rotation.y += Math.max(-yawRate * dt, Math.min(yawRate * dt, dy));
+    const pitchRate = 2.2;
+    const dp = targetPitch - cam.rotation.x;
+    cam.rotation.x += Math.max(-pitchRate * dt, Math.min(pitchRate * dt, dp));
     cam.rotation.z = 0;
     // 队友开镜时跟随缩放
     const bw = this.spectateBot.weapon;
@@ -975,6 +987,37 @@ export class Game {
         this.bloods.splice(i, 1);
       }
     }
+    // 爆炸闪光：扩张 + 淡出 + 清理
+    for (let i = this.effects.length - 1; i >= 0; i--) {
+      const e = this.effects[i];
+      e.t += dt;
+      const k = Math.min(1, e.t / e.max);
+      e.group.scale.setScalar(1 + k * 8);
+      e.group.traverse((o) => {
+        const m = o as THREE.Mesh;
+        if (m.material) {
+          const mats = Array.isArray(m.material) ? m.material : [m.material];
+          for (const mm of mats) {
+            const mat = mm as THREE.MeshBasicMaterial;
+            if (mat.opacity !== undefined) mat.opacity = Math.max(0, 0.95 * (1 - k));
+          }
+        }
+      });
+      if (e.light) e.light.intensity = 4 * (1 - k);
+      if (e.t >= e.max) {
+        this.scene.remove(e.group);
+        if (e.light) this.scene.remove(e.light);
+        e.group.traverse((o) => {
+          const m = o as THREE.Mesh;
+          if (m.geometry) m.geometry.dispose();
+          if (m.material) {
+            const mats = Array.isArray(m.material) ? m.material : [m.material];
+            for (const mm of mats) mm.dispose();
+          }
+        });
+        this.effects.splice(i, 1);
+      }
+    }
     this.hitmarkerT = Math.max(0, this.hitmarkerT - dt);
     this.damageFlash = Math.max(0, this.damageFlash - dt * 1.6);
     this.bombAlert = Math.max(0, this.bombAlert - dt);
@@ -1000,7 +1043,7 @@ export class Game {
     const shooter = this.findCombatant(det.owner);
     if (det.type === 'he') {
       sfx.play('nade_explode');
-      this.spawnExplosion(pos, 0xff9a30);
+      this.spawnExplosion(pos, 0xff8c2a, { size: 1.25 });
       this.noiseEvents.push({ pos: pos.clone(), radius: 3200 });
       const radius = NADES.he.radius;
       for (const t of this.allCombatants()) {
@@ -1016,7 +1059,7 @@ export class Game {
       }
     } else if (det.type === 'flash') {
       sfx.play('flash_pop');
-      this.spawnExplosion(pos, 0xfff6c8);
+      this.spawnExplosion(pos, 0xffffff, { size: 2.2, life: 0.3, ring: false });
       const radius = NADES.flash.radius;
       for (const t of this.allCombatants()) {
         if (!t.alive) continue;
@@ -1050,26 +1093,48 @@ export class Game {
     return this.bots.find((b) => b.name === name) ?? null;
   }
 
-  private spawnExplosion(pos: THREE.Vector3, color: number) {
-    const geo = new THREE.SphereGeometry(NADES.he.radius * 0.22, 12, 10);
-    const mat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.9, depthWrite: false });
-    const mesh = new THREE.Mesh(geo, mat);
-    mesh.position.copy(pos);
-    this.scene.add(mesh);
-    const light = new THREE.PointLight(color, 3, 700, 2);
+  private spawnExplosion(pos: THREE.Vector3, color: number, opts: { size?: number; life?: number; ring?: boolean } = {}) {
+    const size = opts.size ?? 1;
+    const life = opts.life ?? 0.38;
+    const group = new THREE.Group();
+    const mat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.95, depthWrite: false, blending: THREE.AdditiveBlending });
+    const sphere = new THREE.Mesh(new THREE.SphereGeometry(26 * size, 14, 12), mat);
+    group.add(sphere);
+    if (opts.ring !== false) {
+      // 冲击波圆环（贴地扩散）
+      const ringMat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.85, side: THREE.DoubleSide, depthWrite: false, blending: THREE.AdditiveBlending });
+      const ring = new THREE.Mesh(new THREE.RingGeometry(20 * size, 32 * size, 30), ringMat);
+      ring.rotation.x = -Math.PI / 2;
+      ring.position.y = 5;
+      group.add(ring);
+    }
+    group.position.copy(pos);
+    this.scene.add(group);
+    const light = new THREE.PointLight(color, 4 * size, 900 * size, 2);
     light.position.copy(pos);
     this.scene.add(light);
-    this.effects.push({ mesh, t: 0, max: 0.38, light });
+    this.effects.push({ group, t: 0, max: life, light });
   }
 
   private spawnSmoke(pos: THREE.Vector3) {
     const radius = NADES.smoke.radius;
-    const geo = new THREE.SphereGeometry(radius * 0.52, 14, 12);
-    const mat = new THREE.MeshLambertMaterial({ color: 0x9b9b9b, transparent: true, opacity: 0.38, depthWrite: false });
-    const mesh = new THREE.Mesh(geo, mat);
-    mesh.position.set(pos.x, 62, pos.z);
-    this.scene.add(mesh);
-    this.smokes.push({ pos: new THREE.Vector3(pos.x, 62, pos.z), radius, t: 16, mesh });
+    // 几团叠起来的烟，比单一大灰球自然
+    const group = new THREE.Group();
+    const puffs: Array<[number, number, number, number]> = [
+      [175, 0, 0, 0],
+      [150, -75, 30, 45],
+      [155, 65, 20, -55],
+      [125, 25, 58, 35],
+    ];
+    for (const [r, ox, oy, oz] of puffs) {
+      const mat = new THREE.MeshLambertMaterial({ color: 0x8f8f8f, transparent: true, opacity: 0.26, depthWrite: false });
+      const m = new THREE.Mesh(new THREE.SphereGeometry(r, 14, 12), mat);
+      m.position.set(ox, oy, oz);
+      group.add(m);
+    }
+    group.position.set(pos.x, 50, pos.z);
+    this.scene.add(group);
+    this.smokes.push({ pos: new THREE.Vector3(pos.x, 50, pos.z), radius, t: 16, group });
   }
 
   private spawnFire(pos: THREE.Vector3, owner: string) {
@@ -1089,12 +1154,24 @@ export class Game {
     for (let i = this.smokes.length - 1; i >= 0; i--) {
       const s = this.smokes[i];
       s.t -= dt;
-      const mat = s.mesh.material as THREE.MeshLambertMaterial;
-      if (s.t < 3) mat.opacity = Math.max(0, s.t / 3) * 0.38;
+      const fade = s.t < 3 ? Math.max(0, s.t / 3) : 1;
+      s.group.traverse((o) => {
+        const m = o as THREE.Mesh;
+        if (m.material) {
+          const mats = Array.isArray(m.material) ? m.material : [m.material];
+          for (const mm of mats) (mm as THREE.MeshLambertMaterial).opacity = 0.26 * fade;
+        }
+      });
       if (s.t <= 0) {
-        this.scene.remove(s.mesh);
-        s.mesh.geometry.dispose();
-        mat.dispose();
+        this.scene.remove(s.group);
+        s.group.traverse((o) => {
+          const m = o as THREE.Mesh;
+          if (m.geometry) m.geometry.dispose();
+          if (m.material) {
+            const mats = Array.isArray(m.material) ? m.material : [m.material];
+            for (const mm of mats) mm.dispose();
+          }
+        });
         this.smokes.splice(i, 1);
       }
     }
