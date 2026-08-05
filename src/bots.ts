@@ -262,6 +262,14 @@ export class Bot {
     }
   }
 
+  /** 被攻击：解除警戒站位，立刻转向攻击来源 */
+  onHurt(from: THREE.Vector3, worldTime: number) {
+    this.heardPos = from.clone();
+    this.heardT = worldTime - 0.5;
+    this.holdYaw = null;
+    this.reactionT = 0;
+  }
+
   // ---------------------------------------------------------------
   update(dt: number, world: BotWorld, enemies: EnemyRef[]) {
     this.actions.plant = false;
@@ -459,8 +467,8 @@ export class Bot {
     if (this.holdYaw !== null && !this.target && !this.guarding && this.state === 'advance') {
       this.aimYaw = turnToward(this.aimYaw, this.holdYaw, 2.4 * dt);
     }
-    // 守包：到了站位后面向包点外侧（敌人来路），配合上面的扫视
-    if (this.guarding && !this.target && this.state === 'advance') {
+    // 守包：到了站位后面向包点外侧（敌人来路），配合上面的扫视；走动调查时不锁视线
+    if (this.guarding && !this.target && this.state === 'advance' && this.move.pos.distanceTo(this.guardPos) < 150) {
       const dx = this.move.pos.x - world.bombPos.x;
       const dz = this.move.pos.z - world.bombPos.z;
       if (Math.hypot(dx, dz) > 40) {
@@ -508,10 +516,10 @@ export class Bot {
       if (dist > 4096) continue;
       to.y += 50;
       const dir = to.clone().normalize();
-      // FOV
+      // FOV：近距离（约 5 米）360° 感知，远距离才受视野限制——避免“敌人走到脸上都不管”
       const fovDot = Math.cos((this.diff.fov / 2) * Math.PI / 180);
       const flatDir = new THREE.Vector3(dir.x, 0, dir.z).normalize();
-      if (fwd.dot(flatDir) < fovDot) continue;
+      if (dist > 500 && fwd.dot(flatDir) < fovDot) continue;
       // LOS
       const hit = MovementController.raycastBrushes(world.brushes, eye, dir, dist + 10);
       if (hit <= dist - 6) continue;

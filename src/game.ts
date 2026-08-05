@@ -763,6 +763,7 @@ export class Game {
       if (bot.armor > 0) bot.armor = Math.max(0, bot.armor - dmg * 0.35);
       bot.applyDamage(dmg);
       this.spawnBlood(point);
+      if (bot.alive && shooter) bot.onHurt(shooter.move.pos, this.roundT);
       if (!bot.alive) {
         this.killCredit(shooter, bot);
         this.dropBombIfCarrier(bot);
