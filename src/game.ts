@@ -74,6 +74,7 @@ export class Game {
   private clock = new THREE.Clock();
   private disposed = false;
   private onQuit: () => void;
+  private onRestart: () => void;
 
   // HUD DOM
   private hud!: HTMLDivElement;
@@ -101,14 +102,16 @@ export class Game {
     buyItems: null as unknown as HTMLDivElement,
     buyMoney: null as unknown as HTMLDivElement,
     scoreboard: null as unknown as HTMLDivElement,
+    scoreboardTitle: null as unknown as HTMLDivElement,
     scoreboardBody: null as unknown as HTMLDivElement,
     death: null as unknown as HTMLDivElement,
     pause: null as unknown as HTMLDivElement,
     bombIcon: null as unknown as HTMLDivElement,
   };
 
-  constructor(canvas: HTMLCanvasElement, opts: GameOptions, onQuit: () => void) {
+  constructor(canvas: HTMLCanvasElement, opts: GameOptions, onQuit: () => void, onRestart: () => void = onQuit) {
     this.onQuit = onQuit;
+    this.onRestart = onRestart;
     this.difficulty = opts.difficulty;
     this.playerTeam = opts.team === 'random' ? (Math.random() < 0.5 ? 'T' : 'CT') : opts.team;
 
@@ -299,12 +302,25 @@ export class Game {
     sfx.play(winner === this.player.team ? 'round_win' : 'round_lose');
 
     if (this.score[w] >= MATCH.winScore) {
-      this.phase = 'matchover';
-      this.banner('比赛结束', `${winner === 'T' ? 'T' : 'CT'} 阵营以 ${this.score.t}:${this.score.ct} 获胜`);
-      this.el.pause.style.display = 'flex';
-      const resume = this.hud.querySelector<HTMLElement>('#resume-btn')!;
-      resume.style.display = 'none';
+      // 不在这里立刻结束：让“回合结束”横幅展示 4.5 秒后，由 update() 统一进入结算
     }
+  }
+
+  private showMatchOver() {
+    const winner: Team = this.score.t >= MATCH.winScore ? 'T' : 'CT';
+    this.banner('比赛结束', `${winner} 阵营以 ${this.score.t}:${this.score.ct} 获胜`);
+    // 最终计分板
+    this.renderScoreboard();
+    this.el.scoreboardTitle.textContent = '比赛结束 · 最终比分';
+    this.el.scoreboard.style.display = 'flex';
+    // 结束面板：标题从“已暂停”换成“比赛结束”，只保留再来一局/返回主菜单
+    const h2 = this.el.pause.querySelector('h2');
+    if (h2) h2.textContent = '比赛结束';
+    const resume = this.hud.querySelector<HTMLElement>('#resume-btn')!;
+    resume.style.display = 'none';
+    const restart = this.hud.querySelector<HTMLElement>('#restart-btn')!;
+    restart.style.display = 'block';
+    this.el.pause.style.display = 'flex';
   }
 
   // ============================================================
@@ -336,6 +352,7 @@ export class Game {
     } else if (this.phase === 'ended' && this.phaseT <= 0) {
       if (this.score.t >= MATCH.winScore || this.score.ct >= MATCH.winScore) {
         this.phase = 'matchover';
+        this.showMatchOver();
         return;
       }
       this.round++;
@@ -961,6 +978,7 @@ export class Game {
       <div id="pause-overlay">
         <h2>已暂停</h2>
         <button id="resume-btn">继续游戏</button>
+        <button id="restart-btn" style="display:none">再来一局</button>
         <button id="quit-btn">返回主菜单</button>
       </div>
     `;
@@ -990,6 +1008,7 @@ export class Game {
     this.el.buyItems = $('#buy-items');
     this.el.buyMoney = $('#buy-money');
     this.el.scoreboard = $('#scoreboard');
+    this.el.scoreboardTitle = $('#scoreboard-title');
     this.el.scoreboardBody = $('#scoreboard-body');
     this.el.death = $('#death-overlay');
     this.el.pause = $('#pause-overlay');
@@ -997,6 +1016,7 @@ export class Game {
     this.el.banner.querySelector('#banner-title')!.id = 'banner-title';
     this.el.banner.querySelector('#banner-sub')!.id = 'banner-sub';
     $('#resume-btn').addEventListener('click', () => this.togglePause());
+    $('#restart-btn').addEventListener('click', () => this.restart());
     $('#quit-btn').addEventListener('click', () => this.quit());
     this.el.buyMenu.addEventListener('click', (e) => {
       const btn = (e.target as HTMLElement).closest<HTMLElement>('[data-buy]');
@@ -1352,6 +1372,12 @@ export class Game {
     if (this.phase === 'matchover') return;
     this.paused = !this.paused;
     this.el.pause.style.display = this.paused ? 'flex' : 'none';
+    const h2 = this.el.pause.querySelector('h2');
+    if (h2) h2.textContent = '已暂停';
+    const restart = this.hud.querySelector<HTMLElement>('#restart-btn')!;
+    restart.style.display = 'none';
+    const resume = this.hud.querySelector<HTMLElement>('#resume-btn')!;
+    resume.style.display = 'block';
     if (!this.paused) {
       try {
         this.renderer.domElement.requestPointerLock();
@@ -1360,6 +1386,11 @@ export class Game {
       }
       this.clock.getDelta();
     }
+  }
+
+  private restart() {
+    this.dispose();
+    this.onRestart();
   }
 
   private quit() {

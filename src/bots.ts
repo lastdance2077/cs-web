@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { MATCH, WEAPONS, type BotDifficulty, type Team } from './config';
 import { MovementController, type Brush } from './movement';
-import { createBotModel, type BotModel } from './models';
+import { createBotModel, poseArm, type BotModel } from './models';
 import { WeaponSystem } from './weapons';
 import type { CompiledMap, MapSite } from './maps';
 import { sfx } from './audio';
@@ -132,6 +132,7 @@ export class Bot {
     yaw = team === 'T' ? 0 : Math.PI,
   ) {
     this.team = team;
+    this.model.setTeam(team);
     this.move.reset(spawn);
     this.health = this.diff.hp;
     this.alive = true;
@@ -390,31 +391,26 @@ export class Bot {
     this.model.group.position.set(this.move.pos.x, this.move.pos.y, this.move.pos.z);
     this.model.group.rotation.y = this.aimYaw;
 
-    // 走路/持枪动画（拟人：持枪时双臂前伸端枪，刀时自然摆臂）
+    // 走路/持枪动画（拟人：双手握枪，肘部弯曲；刀时自然摆臂）
     const holdingGun = !this.weapon.isKnife;
     this.model.gun.visible = holdingGun;
     const t = performance.now() / 1000 * 9;
-    if (hSpeed > 30 && this.move.onGround) {
-      const swing = Math.sin(t);
-      this.model.legs[0].rotation.x = swing * 0.7;
-      this.model.legs[1].rotation.x = -swing * 0.7;
-      if (holdingGun) {
-        this.model.arms[0].rotation.x = -1.15 + Math.sin(t * 0.7) * 0.06;
-        this.model.arms[1].rotation.x = -1.15 + Math.sin(t * 0.7 + 0.5) * 0.06;
-      } else {
-        this.model.arms[0].rotation.x = -swing * 0.5;
-        this.model.arms[1].rotation.x = swing * 0.5;
-      }
+    const moving = hSpeed > 30 && this.move.onGround;
+    const swing = moving ? Math.sin(t) : 0;
+    this.model.legs[0].rotation.x = swing * 0.7;
+    this.model.legs[1].rotation.x = -swing * 0.7;
+    if (holdingGun) {
+      // 右手握把（后手）、左手护木（前手），随步伐轻微前后摆动
+      const rightHand = new THREE.Vector3(3.0, 49.5 + swing * 1.0, 4.5 - swing * 2.5);
+      const leftHand = new THREE.Vector3(1.8, 51.5 - swing * 0.8, 12.5 + swing * 2.0);
+      poseArm(this.model.arms[0], rightHand, Math.abs(swing) * 0.35);
+      poseArm(this.model.arms[1], leftHand, Math.abs(swing) * 0.35);
     } else {
-      this.model.legs[0].rotation.x = 0;
-      this.model.legs[1].rotation.x = 0;
-      if (holdingGun) {
-        this.model.arms[0].rotation.x = -1.15;
-        this.model.arms[1].rotation.x = -1.15;
-      } else {
-        this.model.arms[0].rotation.x = 0;
-        this.model.arms[1].rotation.x = 0;
-      }
+      // 持刀：手臂自然下垂前后摆动
+      const rightHand = new THREE.Vector3(5.5, 42 + swing * 3, 2 - swing * 9);
+      const leftHand = new THREE.Vector3(-5.5, 42 - swing * 3, 2 + swing * 9);
+      poseArm(this.model.arms[0], rightHand, Math.abs(swing));
+      poseArm(this.model.arms[1], leftHand, Math.abs(swing));
     }
     // 举枪跟随视线俯仰
     this.model.gun.rotation.x = -this.aimPitch * 0.8;

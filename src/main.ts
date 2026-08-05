@@ -108,6 +108,14 @@ function startGame() {
       app.style.display = 'flex';
       buildMenu();
     },
+    () => {
+      // 再来一局：用当前选择直接重开
+      game?.dispose();
+      game = null;
+      canvas?.remove();
+      canvas = null;
+      startGame();
+    },
   );
 }
 

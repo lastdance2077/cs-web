@@ -87,6 +87,22 @@ for (let i = 0; i < starts.length; i++) {
       }
     }
   }
+  // 出生点 → 包点直接视线检查（直线上的格子必须全部可走才视为“能看见”）
+  for (const s of sites) {
+    for (const p of spawns) {
+      const dx = s.x - p.x, dz = s.z - p.z;
+      const steps = Math.max(Math.abs(dx), Math.abs(dz));
+      let clear = true;
+      for (let i = 1; i <= steps; i++) {
+        const x = Math.round(p.x + (dx * i) / steps);
+        const z = Math.round(p.z + (dz * i) / steps);
+        if (!walkable(x, z)) { clear = false; break; }
+      }
+      if (clear) {
+        console.warn(`  ⚠ ${p.k}出生点(${p.x},${p.z}) 与 ${s.k}点(${s.x},${s.z}) 存在直接视线`);
+      }
+    }
+  }
   console.log(`  站点: ${sites.map((s) => `${s.k}(${s.x},${s.z})`).join(' ')} | 出生点: ${spawns.map((s) => `${s.k}(${s.x},${s.z})`).join(' ')}`);
 }
 

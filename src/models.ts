@@ -15,15 +15,24 @@ export interface HitBox {
 export interface BotModel {
   group: THREE.Group;
   hitboxes: HitBox[];
-  arms: THREE.Group[];
+  arms: BotArm[];
   legs: THREE.Group[];
   gun: THREE.Group;
+  setTeam: (team: Team) => void;
+}
+
+export interface BotArm {
+  group: THREE.Group; // 肩部枢轴
+  upper: THREE.Mesh;  // 上臂
+  lower: THREE.Mesh;  // 前臂
+  elbow: THREE.Mesh;  // 肘关节球
+  hand: THREE.Mesh;   // 手
 }
 
 export function createBotModel(team: Team): BotModel {
   const group = new THREE.Group();
-  const cloth = team === 'T' ? 0xc8a86b : 0x3a6ea5;
-  const dark = team === 'T' ? 0x7a623a : 0x274a75;
+  const clothMat = new THREE.MeshLambertMaterial({ color: team === 'T' ? 0xc8a86b : 0x3a6ea5 });
+  const darkMat = new THREE.MeshLambertMaterial({ color: team === 'T' ? 0x7a623a : 0x274a75 });
   const skin = 0xd9b38c;
   const hair = 0x2b2118;
   const m = (c: number) => new THREE.MeshLambertMaterial({ color: c });
@@ -33,7 +42,7 @@ export function createBotModel(team: Team): BotModel {
   const mkLeg = (x: number) => {
     const pivot = new THREE.Group();
     pivot.position.set(x, 38, 0);
-    const mesh = new THREE.Mesh(legGeo, m(dark));
+    const mesh = new THREE.Mesh(legGeo, darkMat);
     mesh.position.y = -16;
     const foot = new THREE.Mesh(new THREE.BoxGeometry(4.8, 3, 7.5), m(0x1d1d1d));
     foot.position.set(0, -30, 2);
@@ -45,37 +54,37 @@ export function createBotModel(team: Team): BotModel {
   const legR = mkLeg(7.5);
 
   // ---- 躯干：胶囊 + 护甲背心 + 腰带 ----
-  const torso = new THREE.Mesh(new THREE.CapsuleGeometry(7.8, 15, 4, 12), m(cloth));
+  const torso = new THREE.Mesh(new THREE.CapsuleGeometry(7.8, 15, 4, 12), clothMat);
   torso.position.y = 47;
-  const vest = new THREE.Mesh(new THREE.BoxGeometry(17, 13, 10.5), m(dark));
+  const vest = new THREE.Mesh(new THREE.BoxGeometry(17, 13, 10.5), darkMat);
   vest.position.y = 52;
-  const belt = new THREE.Mesh(new THREE.BoxGeometry(14, 4, 9), m(dark));
+  const belt = new THREE.Mesh(new THREE.BoxGeometry(14, 4, 9), darkMat);
   belt.position.y = 36.5;
   group.add(torso, vest, belt);
 
   // ---- 肩膀（球体，让肩部圆润）----
   const shoulderGeo = new THREE.SphereGeometry(3.6, 10, 8);
-  const shL = new THREE.Mesh(shoulderGeo, m(dark));
+  const shL = new THREE.Mesh(shoulderGeo, darkMat);
   shL.position.set(-9.5, 55.5, 0);
-  const shR = new THREE.Mesh(shoulderGeo, m(dark));
+  const shR = new THREE.Mesh(shoulderGeo, darkMat);
   shR.position.set(9.5, 55.5, 0);
   group.add(shL, shR);
 
-  // ---- 手臂（以肩关节为枢轴）+ 手 ----
-  const armGeo = new THREE.CapsuleGeometry(2.7, 15, 4, 10);
+  // ---- 两段式手臂（上臂+前臂+肘+手），由 poseArm 摆姿势 ----
+  const armGeo = new THREE.CapsuleGeometry(2.6, 14, 4, 10);
   const mkArm = (x: number) => {
-    const pivot = new THREE.Group();
-    pivot.position.set(x, 55, 0);
-    const mesh = new THREE.Mesh(armGeo, m(dark));
-    mesh.position.y = -9;
+    const group = new THREE.Group();
+    group.position.set(x, 56, 0);
+    const upper = new THREE.Mesh(armGeo, darkMat);
+    const lower = new THREE.Mesh(armGeo, darkMat);
+    const elbow = new THREE.Mesh(new THREE.SphereGeometry(3.4, 8, 8), darkMat);
     const hand = new THREE.Mesh(new THREE.SphereGeometry(2.4, 8, 8), m(skin));
-    hand.position.y = -20;
-    pivot.add(mesh, hand);
-    group.add(pivot);
-    return { pivot, mesh };
+    group.add(upper, lower, elbow, hand);
+    group.visible = false; // 由 poseArm 激活并摆好
+    return { group, upper, lower, elbow, hand };
   };
-  const armL = mkArm(-10.5);
-  const armR = mkArm(10.5);
+  const armL = mkArm(-11);
+  const armR = mkArm(11);
 
   // ---- 脖子 + 头 + 头发 + 眼睛 ----
   const neck = new THREE.Mesh(new THREE.CylinderGeometry(1.8, 2.2, 3.5, 8), m(skin));
@@ -102,14 +111,13 @@ export function createBotModel(team: Team): BotModel {
     gun.add(mesh);
     return mesh;
   };
-  part(1.6, 1.6, 9, 0x555555, 0, 0, 8); // 枪管
-  part(2, 2, 5, 0x3a3a3a, 0, 0, 0.5); // 机匣
-  part(1.4, 3.2, 1.6, 0x2e2e2e, 0, -2.4, -1); // 弹匣
-  part(1.6, 2.4, 1.8, 0x7a5a34, 0, -1.8, -3.5); // 握把/枪托
-  const handL = new THREE.Mesh(new THREE.SphereGeometry(2.4, 8, 8), m(skin)); // 左手搭在护木上
-  handL.position.set(0, -1.2, 5.5);
-  gun.add(handL);
-  gun.position.set(0, 50, 8);
+  part(1.4, 1.4, 9, 0x555555, 0, 0, 14.5); // 枪管
+  part(1.8, 1.8, 5, 0x4a4a4a, 0, 0, 10.5); // 护木
+  part(2, 2, 6, 0x3a3a3a, 0, 0, 6); // 机匣
+  part(1.4, 3.2, 1.6, 0x2e2e2e, 0, -2.4, 7); // 弹匣
+  part(1.5, 2.4, 1.6, 0x7a5a34, 0, -1.8, 4.2); // 握把
+  part(1.6, 2.2, 3.5, 0x6b4f2a, 0, 0, 1.8); // 枪托
+  gun.position.set(0, 52, 10);
 
   group.add(gun);
   return {
@@ -118,15 +126,50 @@ export function createBotModel(team: Team): BotModel {
       { mesh: head, part: 'head', mult: 1 },
       { mesh: torso, part: 'chest', mult: 1 },
       { mesh: vest, part: 'stomach', mult: 1 },
-      { mesh: armL.mesh, part: 'arm', mult: 0.9 },
-      { mesh: armR.mesh, part: 'arm', mult: 0.9 },
+      { mesh: armL.upper, part: 'arm', mult: 0.9 },
+      { mesh: armL.lower, part: 'arm', mult: 0.9 },
+      { mesh: armR.upper, part: 'arm', mult: 0.9 },
+      { mesh: armR.lower, part: 'arm', mult: 0.9 },
       { mesh: legL.mesh, part: 'leg', mult: 0.75 },
       { mesh: legR.mesh, part: 'leg', mult: 0.75 },
     ],
-    arms: [armL.pivot, armR.pivot],
+    arms: [armL, armR],
     legs: [legL.pivot, legR.pivot],
     gun,
+    setTeam(t: Team) {
+      clothMat.color.set(t === 'T' ? 0xc8a86b : 0x3a6ea5);
+      darkMat.color.set(t === 'T' ? 0x7a623a : 0x274a75);
+    },
   };
+}
+
+const _armV1 = new THREE.Vector3();
+const _armV2 = new THREE.Vector3();
+const _armUp = new THREE.Vector3(0, 1, 0);
+
+/** 把手臂摆到指定手部位置：上臂肩→肘、前臂肘→手，肘部向外侧/下方弯折 */
+export function poseArm(arm: BotArm, hand: THREE.Vector3, bend = 0) {
+  const s = arm.group.position; // 肩部（模型空间）
+  const dir = _armV1.copy(hand).sub(s);
+  const len = dir.length();
+  if (len < 1) return;
+  const mid = _armV2.copy(s).addScaledVector(dir, 0.5);
+  const side = Math.sign(s.x) || 1;
+  const right = _armV1.set(dir.z, 0, -dir.x).normalize();
+  const elbow = mid.clone().addScaledVector(right, 4.5 * side).add(new THREE.Vector3(0, -2.5 - bend * 5, -1.5));
+  spanCapsule(arm.upper, s, elbow, 2.6, 14);
+  spanCapsule(arm.lower, elbow, hand, 2.6, 14);
+  arm.elbow.position.copy(elbow);
+  arm.hand.position.copy(hand);
+  arm.group.visible = true;
+}
+
+function spanCapsule(mesh: THREE.Mesh, a: THREE.Vector3, b: THREE.Vector3, radius: number, cylLen: number) {
+  const d = _armV1.copy(b).sub(a);
+  const len = d.length();
+  mesh.position.copy(a).addScaledVector(d, 0.5);
+  mesh.scale.set(1, Math.max(0.01, (len - radius * 2) / cylLen), 1);
+  mesh.quaternion.setFromUnitVectors(_armUp, d.normalize());
 }
 
 /** 玩家隐形受击盒（供 Bot 射线检测） */
