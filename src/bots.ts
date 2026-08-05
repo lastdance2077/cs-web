@@ -332,8 +332,15 @@ export class Bot {
         }
         const f = new THREE.Vector3(Math.sin(this.aimYaw), 0, Math.cos(this.aimYaw));
         const r = new THREE.Vector3(f.z, 0, -f.x);
-        wishX = r.x * this.strafeDir;
-        wishZ = r.z * this.strafeDir;
+        const dToTarget = this.move.pos.distanceTo(this.target.pos);
+        if (dToTarget > 420) {
+          // 距离远：边拉枪边推进，避免隔着半张图互喷
+          wishX = f.x * 0.75 + r.x * this.strafeDir * 0.5;
+          wishZ = f.z * 0.75 + r.z * this.strafeDir * 0.5;
+        } else {
+          wishX = r.x * this.strafeDir;
+          wishZ = r.z * this.strafeDir;
+        }
       }
     } else {
       this.followPath(dt);
@@ -620,8 +627,10 @@ export class Bot {
     );
     const toTarget = aim.clone().sub(eye).normalize();
     const align = fwd.dot(toTarget);
+    // 弹道自检：枪口方向的射线能真正到达目标（中途不被墙挡）才开火
+    const shotClear = MovementController.raycastBrushes(world.brushes, eye, fwd, dist + 30) > dist - 12;
 
-    if (align > 0.985) {
+    if (align > 0.985 && shotClear) {
       // 距离太近 → 用刀
       if (dist < 110 && (this.weapon.isKnife || !this.weapon.def.id.startsWith('a'))) {
         this.switchSlot('melee');

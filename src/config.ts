@@ -174,17 +174,17 @@ export interface BotDifficulty {
 export const BOT_DIFFICULTY: Record<'easy' | 'normal' | 'hard', BotDifficulty> = {
   easy: {
     label: '简单', desc: '反应慢、枪法歪，适合新手熟悉地图',
-    aimError: 0.18, reactionMin: 0.7, reactionMax: 1.2, burstMin: 1, burstMax: 2,
+    aimError: 0.06, reactionMin: 0.7, reactionMax: 1.2, burstMin: 1, burstMax: 2,
     burstPause: 0.45, fov: 90, hearing: 1200, aimTurnSpeed: 3, moveShoot: false, aimLead: 0.1, hp: 100, dmgMult: 0.8,
   },
   normal: {
     label: '普通', desc: '反应和枪法接近真人',
-    aimError: 0.07, reactionMin: 0.3, reactionMax: 0.55, burstMin: 3, burstMax: 5,
+    aimError: 0.03, reactionMin: 0.3, reactionMax: 0.55, burstMin: 3, burstMax: 5,
     burstPause: 0.28, fov: 120, hearing: 1800, aimTurnSpeed: 5, moveShoot: true, aimLead: 0.5, hp: 100, dmgMult: 1,
   },
   hard: {
     label: '困难', desc: '预瞄、连发、压枪都很快，别站桩',
-    aimError: 0.022, reactionMin: 0.12, reactionMax: 0.28, burstMin: 4, burstMax: 8,
+    aimError: 0.015, reactionMin: 0.12, reactionMax: 0.28, burstMin: 4, burstMax: 8,
     burstPause: 0.18, fov: 150, hearing: 2800, aimTurnSpeed: 8, moveShoot: true, aimLead: 0.85, hp: 100, dmgMult: 1.1,
   },
 };
