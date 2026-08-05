@@ -451,12 +451,15 @@ export class Bot {
       if (site) return site.pos.clone();
     } else {
       if (this.role === 'mid') {
-        const mid = new THREE.Vector3(
-          (world.map.def.w / 2) * world.map.def.tile - world.map.def.tile,
-          0,
-          (world.map.def.h / 2) * world.map.def.tile - world.map.def.tile,
-        );
-        return mid;
+        // 中路 = 地图中心附近最近的可行走格子（旧公式算到了地图角落的墙里）
+        const map = botWorldMap.get(this);
+        if (map) {
+          const cx = Math.floor(map.def.w / 2);
+          const cz = Math.floor(map.def.h / 2);
+          const alt = map.nav.nearestWalkable(cx, cz);
+          if (alt) return map.nav.tileToWorld(alt.x, alt.z);
+        }
+        return new THREE.Vector3(0, 0, 0);
       }
       const site = world.map.sites.find((s) => s.id === (this.role === 'siteA' ? 'A' : 'B'));
       if (site) return site.pos.clone();
