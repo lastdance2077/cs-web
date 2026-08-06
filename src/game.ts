@@ -46,6 +46,8 @@ export class Game {
   private playerTeam: Team;
   private round = 1;
   private score = { t: 0, ct: 0 };
+  private teamWins = 0;   // 你方队伍总胜局（换边后累计）
+  private enemyWins = 0;  // 敌方队伍总胜局
   private lossStreak = { t: 0, ct: 0 };
   private phase: 'freeze' | 'live' | 'ended' | 'matchover' = 'freeze';
   private phaseT = 0;
@@ -387,6 +389,9 @@ export class Game {
     this.phaseT = 4.5;
     const w = this.teamOf(winner);
     this.score[w]++;
+    // 按队伍累计总胜局（换边后你方依然是同一支队伍）
+    if (winner === this.player.team) this.teamWins++;
+    else this.enemyWins++;
     const loser: 't' | 'ct' = w === 't' ? 'ct' : 't';
 
     // 经济结算
@@ -409,7 +414,7 @@ export class Game {
     this.banner(winner === 'T' ? 'T 阵营胜利' : 'CT 阵营胜利', reasonText(reason));
     sfx.play(winner === this.player.team ? 'round_win' : 'round_lose');
 
-    if (this.score[w] >= MATCH.winScore) {
+    if (this.teamWins >= MATCH.winScore || this.enemyWins >= MATCH.winScore) {
       // 不在这里立刻结束：让“回合结束”横幅展示 4.5 秒后，由 update() 统一进入结算
     }
   }
@@ -423,8 +428,8 @@ export class Game {
         /* 忽略 */
       }
     }
-    const winner: Team = this.score.t >= MATCH.winScore ? 'T' : 'CT';
-    this.banner('比赛结束', `${winner} 阵营以 ${this.score.t}:${this.score.ct} 获胜`);
+    const playerWon = this.teamWins >= MATCH.winScore;
+    this.banner('比赛结束', `${playerWon ? '你方' : '敌方'}以 ${this.teamWins}:${this.enemyWins} 获胜`);
     // 最终计分板
     this.renderScoreboard();
     this.el.scoreboardTitle.textContent = '比赛结束 · 最终比分';
@@ -466,7 +471,7 @@ export class Game {
       this.phaseT = 999;
       this.banner('', '');
     } else if (this.phase === 'ended' && this.phaseT <= 0) {
-      if (this.score.t >= MATCH.winScore || this.score.ct >= MATCH.winScore) {
+      if (this.teamWins >= MATCH.winScore || this.enemyWins >= MATCH.winScore) {
         this.phase = 'matchover';
         this.showMatchOver();
         return;
@@ -1729,7 +1734,10 @@ export class Game {
     const p = this.player;
     const t = Math.max(0, Math.ceil(this.bomb.planted ? this.bomb.time : this.roundT));
     this.el.timer.textContent = `${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`;
-    this.el.score.innerHTML = `<span class="ct">CT ${this.score.ct}</span><span class="sep">:</span><span class="t">${this.score.t} T</span>`;
+    const myCls = p.team === 'T' ? 't' : 'ct';
+    const enCls = p.team === 'T' ? 'ct' : 't';
+    this.el.score.innerHTML =
+      `<span class="${myCls}">你方 ${this.teamWins}</span><span class="sep">:</span><span class="${enCls}">${this.enemyWins} 敌方</span>`;
     this.el.round.textContent = `第 ${this.round} 回合`;
     this.el.health.textContent = String(Math.max(0, Math.ceil(p.health)));
     this.el.armor.textContent = String(Math.max(0, Math.ceil(p.armor)));
