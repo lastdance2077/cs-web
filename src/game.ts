@@ -457,13 +457,13 @@ export class Game {
       bot.update(dt, world, enemies);
       if (bot.actions.shot) {
         this.resolveShot(bot.actions.shot.origin, bot.actions.shot.dir, bot.team, bot);
-        this.noiseEvents.push({ pos: bot.move.pos.clone(), radius: 2600 });
+        this.noiseEvents.push({ pos: bot.move.pos.clone(), radius: 2600, team: bot.team });
       }
       if (bot.actions.nade) {
         const nd = bot.actions.nade;
         this.projectiles.push(new NadeProjectile(nd.type, bot.team, bot.name, bot.eyePos, nd.dir, bot.move.vel, nd.cook));
         sfx.play('nade_throw');
-        this.noiseEvents.push({ pos: bot.move.pos.clone(), radius: 1400 });
+        this.noiseEvents.push({ pos: bot.move.pos.clone(), radius: 1400, team: bot.team });
         bot.actions.nade = null;
       }
       if (bot.actions.plant && bot.actions.plantProgress >= 1) this.doPlant(bot);
@@ -614,8 +614,8 @@ export class Game {
     return refs;
   }
 
-  private noiseEvents: Array<{ pos: THREE.Vector3; radius: number }> = [];
-  private collectNoises(_dt: number): Array<{ pos: THREE.Vector3; radius: number }> {
+  private noiseEvents: Array<{ pos: THREE.Vector3; radius: number; team: Team }> = [];
+  private collectNoises(_dt: number): Array<{ pos: THREE.Vector3; radius: number; team: Team }> {
     return this.noiseEvents;
   }
 
@@ -637,7 +637,7 @@ export class Game {
       const { fired } = p.shoot(dir);
       if (fired) {
         this.resolveShot(p.eyePosition, dir, p.team, p);
-        this.noiseEvents.push({ pos: p.move.pos.clone(), radius: 2600 });
+        this.noiseEvents.push({ pos: p.move.pos.clone(), radius: 2600, team: p.team });
       }
     }
     if (this.input.reload) {
@@ -1062,7 +1062,7 @@ export class Game {
     if (det.type === 'he') {
       sfx.play('nade_explode');
       this.spawnExplosion(pos, 0xff8c2a, { size: 1.25 });
-      this.noiseEvents.push({ pos: pos.clone(), radius: 3200 });
+      this.noiseEvents.push({ pos: pos.clone(), radius: 3200, team: det.team });
       const radius = NADES.he.radius;
       for (const t of this.allCombatants()) {
         if (!t.alive) continue;
@@ -1094,11 +1094,11 @@ export class Game {
     } else if (det.type === 'smoke') {
       sfx.play('smoke_pop');
       this.spawnSmoke(pos);
-      this.noiseEvents.push({ pos: pos.clone(), radius: 1000 });
+      this.noiseEvents.push({ pos: pos.clone(), radius: 1000, team: det.team });
     } else if (det.type === 'molotov') {
       sfx.play('fire');
       this.spawnFire(pos, det.owner);
-      this.noiseEvents.push({ pos: pos.clone(), radius: 1400 });
+      this.noiseEvents.push({ pos: pos.clone(), radius: 1400, team: det.team });
     }
   }
 
@@ -1411,7 +1411,7 @@ export class Game {
     p.camera.getWorldDirection(dir);
     this.projectiles.push(new NadeProjectile(type, p.team, p.name, p.eyePosition, dir, p.move.vel, cook));
     sfx.play('nade_throw');
-    this.noiseEvents.push({ pos: p.move.pos.clone(), radius: 1400 });
+    this.noiseEvents.push({ pos: p.move.pos.clone(), radius: 1400, team: p.team });
     this.nadeCookT = 0;
     this.deselectNade();
     p.switchSlot(this.prevSlot);

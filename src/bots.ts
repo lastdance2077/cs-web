@@ -17,6 +17,7 @@ export interface EnemyRef {
 export interface NoiseEvent {
   pos: THREE.Vector3;
   radius: number;
+  team: Team; // 声音来源阵营：人机只调查敌方动静
 }
 
 export interface BotWorld {
@@ -324,6 +325,7 @@ export class Bot {
 
     // 听到枪声
     for (const n of world.noises) {
+      if (n.team === this.team) continue; // 自己人的枪声不调查
       const d = this.move.pos.distanceTo(n.pos);
       if (d < n.radius && world.time - this.heardT > 1.2) {
         this.heardPos = n.pos.clone();
