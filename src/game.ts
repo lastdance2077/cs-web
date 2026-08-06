@@ -205,6 +205,30 @@ export class Game {
     return team === 'T' ? 't' : 'ct';
   }
 
+  /** 给进攻人机分配一个侧翼途经点：偏向地图中心（敌方一侧）的随机可走点 */
+  private assignTacticRoute(bot: Bot, site: 'A' | 'B') {
+    const siteObj = this.map.sites.find((s) => s.id === site);
+    bot.route = null;
+    bot.objective.copy(siteObj?.pos ?? new THREE.Vector3());
+    if (!siteObj) return;
+    const nav = this.map.nav;
+    const base = new THREE.Vector3().subVectors(new THREE.Vector3(), siteObj.pos);
+    base.y = 0;
+    if (base.lengthSq() < 1) base.set(1, 0, 0);
+    base.normalize();
+    const baseAng = Math.atan2(base.x, base.z);
+    for (let k = 0; k < 7; k++) {
+      const ang = baseAng + (Math.random() - 0.5) * 1.7;
+      const dist = 240 + Math.random() * 190;
+      const cand = siteObj.pos.clone().add(new THREE.Vector3(Math.sin(ang) * dist, 0, Math.cos(ang) * dist));
+      const tile = nav.worldToTile(cand);
+      if (nav.isWalkable(tile.x, tile.z)) {
+        bot.route = [cand];
+        return;
+      }
+    }
+  }
+
   private startRound() {
     const half = this.round <= MATCH.halfRounds;
     const playerTeam = half ? this.playerTeam : (this.playerTeam === 'T' ? 'CT' : 'T');
@@ -304,18 +328,35 @@ export class Game {
     const ctBots = this.bots.filter((b) => b.team === 'CT');
     const allT = this.player.team === 'T' ? [this.player, ...tBots] : tBots;
     const allCT = this.player.team === 'CT' ? [this.player, ...ctBots] : ctBots;
-    // 炸弹携带者（T 方随机一个）
-    const carrier = allT[Math.floor(Math.random() * allT.length)];
-    const carrierSite: 'A' | 'B' = Math.random() < 0.5 ? 'A' : 'B';
-    carrier.hasBomb = true;
-    // T 分工：2 人跟包点，2 人另一包点
-    const siteSplit: Array<'A' | 'B'> = [carrierSite, carrierSite, carrierSite === 'A' ? 'B' : 'A', carrierSite === 'A' ? 'B' : 'A'];
+    // ===== T 战术：每回合随机（rush A / rush B / 拆分 / 堆点）=====
+    const tTactics: Array<{ label: string; sites: Array<'A' | 'B'> }> = [
+      { label: 'rushA', sites: ['A', 'A', 'A', 'A'] },
+      { label: 'rushB', sites: ['B', 'B', 'B', 'B'] },
+      { label: 'split', sites: ['A', 'A', 'B', 'B'] },
+      { label: 'splitRev', sites: ['A', 'B', 'B', 'A'] },
+      { label: 'stackA', sites: ['A', 'A', 'A', 'B'] },
+      { label: 'stackB', sites: ['A', 'B', 'B', 'B'] },
+    ];
+    const tTactic = tTactics[Math.floor(Math.random() * tTactics.length)];
+    const shuffledSites = [...tTactic.sites].sort(() => Math.random() - 0.5);
     tBots.forEach((b, i) => {
-      b.siteChoice = siteSplit[i % siteSplit.length];
+      b.siteChoice = shuffledSites[i % shuffledSites.length];
       b.role = 'siteA';
+      // 每个进攻人机分配一个侧翼途经点，走出不同路线
+      this.assignTacticRoute(b, b.siteChoice);
     });
-    // CT 分工：2 A、2 B、1 中路
-    const ctRoles: Array<'siteA' | 'siteB' | 'mid'> = ['siteA', 'siteA', 'siteB', 'siteB', 'mid'];
+    // 炸弹携带者（T 方随机一个 Bot，随它的路线进攻）
+    const carrier = tBots[Math.floor(Math.random() * tBots.length)];
+    carrier.hasBomb = true;
+    // ===== CT 战术：每回合随机站位（标准 / 堆 A / 堆 B / 前压中路）=====
+    const ctTactics: Array<Array<'siteA' | 'siteB' | 'mid'>> = [
+      ['siteA', 'siteA', 'siteB', 'siteB', 'mid'],
+      ['siteA', 'siteA', 'siteA', 'siteB', 'mid'],
+      ['siteA', 'siteB', 'siteB', 'siteB', 'mid'],
+      ['siteA', 'siteB', 'mid', 'mid', 'mid'],
+      ['siteA', 'siteB', 'siteB', 'mid', 'mid'],
+    ];
+    const ctRoles = ctTactics[Math.floor(Math.random() * ctTactics.length)].slice().sort(() => Math.random() - 0.5);
     ctBots.forEach((b, i) => {
       b.role = ctRoles[i % ctRoles.length];
       b.siteChoice = b.role === 'siteB' ? 'B' : 'A';

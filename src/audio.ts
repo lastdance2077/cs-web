@@ -6,7 +6,8 @@ type SfxName =
   | 'footstep' | 'jump' | 'reload' | 'buy'
   | 'plant' | 'defuse' | 'bomb_beep' | 'bomb_explode'
   | 'round_start' | 'round_win' | 'round_lose' | 'hurt'
-  | 'nade_pull' | 'nade_throw' | 'nade_explode' | 'flash_pop' | 'smoke_pop' | 'fire';
+  | 'nade_pull' | 'nade_throw' | 'nade_explode' | 'flash_pop' | 'smoke_pop' | 'fire'
+  | 'footstep_bot';
 
 class SoundFX {
   private ctx: AudioContext | null = null;
@@ -112,7 +113,10 @@ class SoundFX {
         this.burst({ dur: 0.3, filter: 700, gain: 0.3 });
         break;
       case 'footstep':
-        this.burst({ dur: 0.07, filter: 260, q: 0.7, gain: 0.13 });
+        this.burst({ dur: 0.07, filter: 220 + Math.random() * 90, q: 0.7, gain: 0.22 });
+        break;
+      case 'footstep_bot':
+        this.burst({ dur: 0.07, filter: 200 + Math.random() * 70, q: 0.7, gain: 0.12 });
         break;
       case 'jump':
         this.burst({ dur: 0.05, filter: 500, q: 0.5, gain: 0.08 });

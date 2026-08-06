@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { MATCH, WEAPONS, type BotDifficulty, type Team } from './config';
+import { FEEL, MATCH, WEAPONS, type BotDifficulty, type Team } from './config';
 import { MovementController, type Brush } from './movement';
 import { createBotModel, poseArm, type BotModel } from './models';
 import { WeaponSystem } from './weapons';
@@ -93,7 +93,13 @@ export class Bot {
   private guardAngle = Math.random() * Math.PI * 2;
   private guardPos = new THREE.Vector3();
   private holdYaw: number | null = null; // 到点后警戒方向（面向敌人来路/入口）
+  private walkT = 0;
+  private landVel = 0;
   private moveAlign = 1; // 身体朝向与移动方向的对齐度（用于卡住判定）
+  /** 战术路线：前往包点前先经过的侧翼途经点（由开局战术分配） */
+  route: THREE.Vector3[] | null = null;
+  /** 战术路线对应的最终目标（用于判断是否还在前往包点） */
+  objective = new THREE.Vector3();
   private aimErrT = 0;
   private aimErrYaw = 0;
   private aimErrPitch = 0;
@@ -161,6 +167,9 @@ export class Bot {
     this.detour = null;
     this.guarding = false;
     this.holdYaw = null;
+    this.route = null;
+    this.walkT = 0;
+    this.landVel = 0;
     this.moveAlign = 1;
     this.aimErrT = 0;
     this.aimErrYaw = 0;
@@ -436,6 +445,16 @@ export class Bot {
       const h = Math.min(STEP, remaining);
     this.move.update(h, wishX, wishZ, jump, false, false, this.weapon.def.moveSpeed);
       remaining -= h;
+    }
+    // 脚步声（落地 + 步行节奏，音量比玩家略低）
+    if (this.move.onGround && this.landVel < -320) sfx.play('footstep_bot');
+    this.landVel = this.move.vel.y;
+    const stepSpeed = Math.hypot(this.move.vel.x, this.move.vel.z);
+    if (this.move.onGround && stepSpeed > 40) {
+      this.walkT += dt * stepSpeed / FEEL.walkSpeed;
+      if (Math.floor(this.walkT * 3.2) !== Math.floor((this.walkT - dt) * 3.2)) sfx.play('footstep_bot');
+    } else {
+      this.walkT = 0;
     }
     // 到点持枪警戒：面向敌人来路（如 B 点唯一入口），不再随机乱转
     if (!this.guarding) {
@@ -835,6 +854,18 @@ const pathCache = new WeakMap<Bot, { from: THREE.Vector3; to: THREE.Vector3; pat
 function worldPath(bot: Bot, to: THREE.Vector3): THREE.Vector3[] {
   const map = botWorldMap.get(bot);
   if (!map) return [to.clone()];
+  // 战术路线：只在前往包点目标时生效（被枪声/掉包等临时改道时走最近路线）
+  if (bot.route && bot.route.length && to.distanceToSquared(bot.objective) < 120 * 120) {
+    const pts = [bot.move.pos.clone(), ...bot.route.map((p) => p.clone()), to.clone()];
+    const full: THREE.Vector3[] = [];
+    for (let i = 0; i < pts.length - 1; i++) {
+      const seg = map.nav.findPath(pts[i], pts[i + 1]);
+      if (!seg || seg.length < 2) return [to.clone()];
+      full.push(...seg.slice(0, -1));
+    }
+    full.push(to.clone());
+    return full;
+  }
   const cached = pathCache.get(bot);
   if (cached && cached.from.distanceToSquared(bot.move.pos) < 64 * 64 && cached.to.distanceToSquared(to) < 48 * 48) {
     return cached.path ?? [to.clone()];
