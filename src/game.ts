@@ -361,10 +361,9 @@ export class Game {
     // ===== CT 战术：每回合随机站位（标准 / 堆 A / 堆 B / 前压中路）=====
     const ctTactics: Array<Array<'siteA' | 'siteB' | 'mid'>> = [
       ['siteA', 'siteA', 'siteB', 'siteB', 'mid'],
-      ['siteA', 'siteA', 'siteA', 'siteB', 'mid'],
-      ['siteA', 'siteB', 'siteB', 'siteB', 'mid'],
       ['siteA', 'siteB', 'mid', 'mid', 'mid'],
       ['siteA', 'siteB', 'siteB', 'mid', 'mid'],
+      ['siteA', 'siteA', 'siteB', 'mid', 'mid'],
     ];
     const ctRoles = ctTactics[Math.floor(Math.random() * ctTactics.length)].slice().sort(() => Math.random() - 0.5);
     ctBots.forEach((b, i) => {
