@@ -93,6 +93,7 @@ export class Bot {
   private guardAngle = Math.random() * Math.PI * 2;
   private guardPos = new THREE.Vector3();
   private guardYaw: number | null = null;
+  private hurtAlertT = 0; // 被打后的警觉期：期间不守包/不锁警戒方向
   private holdYaw: number | null = null; // 到点后警戒方向（面向敌人来路/入口）
   private walkT = 0;
   private landVel = 0;
@@ -168,6 +169,7 @@ export class Bot {
     this.detour = null;
     this.guarding = false;
     this.guardYaw = null;
+    this.hurtAlertT = 0;
     this.holdYaw = null;
     this.route = null;
     this.walkT = 0;
@@ -278,6 +280,7 @@ export class Bot {
   onHurt(from: THREE.Vector3, worldTime: number) {
     this.heardPos = from.clone();
     this.heardT = worldTime - 0.5;
+    this.hurtAlertT = 3;
     this.holdYaw = null;
     this.reactionT = 0;
   }
@@ -289,6 +292,7 @@ export class Bot {
     this.actions.shot = null;
     this.actions.nade = null;
     this.blindT = Math.max(0, this.blindT - dt);
+    this.hurtAlertT = Math.max(0, this.hurtAlertT - dt);
     this.nadeCdT -= dt;
     if (!this.alive) {
       this.deathT += dt;
@@ -352,7 +356,7 @@ export class Bot {
     const bombOnGround = this.team === 'T' && !!world.bombDropped && !this.hasBomb;
     if (this.target && this.reactionT <= 0 && !(isCarrier && distToTarget > 200) && !(bombOnGround && distToTarget > 200)) {
       this.state = 'combat';
-    } else if (this.team === 'T' && world.bombPlanted) {
+    } else if (this.team === 'T' && world.bombPlanted && this.hurtAlertT <= 0) {
       this.state = 'advance'; // 守包：散开到包点四周，面向敌人来路
       this.role = 'bomb';
       this.beginGuard(world);
@@ -466,7 +470,7 @@ export class Bot {
       this.walkT = 0;
     }
     // 到点持枪警戒（仅 CT 防守用）：面向敌人来路（如 B 点唯一入口）；T 无包时应主动猎杀
-    if (!this.guarding && this.team === 'CT') {
+    if (!this.guarding && this.team === 'CT' && this.hurtAlertT <= 0) {
       const finalPt = this.path.length ? this.path[this.path.length - 1] : null;
       const arrived =
         !!finalPt &&
@@ -494,11 +498,11 @@ export class Bot {
       this.aimYaw += Math.sin(performance.now() / 1000 * 0.7) * 0.3 * dt;
     }
     // 警戒中：视线收在入口方向（配合上面的缓慢扫视）
-    if (this.holdYaw !== null && !this.target && !this.guarding && this.state === 'advance') {
+    if (this.holdYaw !== null && !this.target && !this.guarding && this.hurtAlertT <= 0 && this.state === 'advance') {
       this.aimYaw = turnToward(this.aimYaw, this.holdYaw, 2.4 * dt);
     }
     // 守包：到了站位后看向敌人来路（已按墙体视线选好方向），配合上面的扫视；走动调查时不锁视线
-    if (this.guarding && !this.target && this.state === 'advance' && this.move.pos.distanceTo(this.guardPos) < 150) {
+    if (this.guarding && !this.target && this.hurtAlertT <= 0 && this.state === 'advance' && this.move.pos.distanceTo(this.guardPos) < 150) {
       this.aimYaw = turnToward(this.aimYaw, this.guardYaw ?? this.aimYaw, 2.4 * dt);
     }
     this.model.group.position.set(this.move.pos.x, this.move.pos.y, this.move.pos.z);
