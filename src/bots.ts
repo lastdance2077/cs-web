@@ -92,6 +92,7 @@ export class Bot {
   private guarding = false;
   private guardAngle = Math.random() * Math.PI * 2;
   private guardPos = new THREE.Vector3();
+  private guardYaw: number | null = null;
   private holdYaw: number | null = null; // 到点后警戒方向（面向敌人来路/入口）
   private walkT = 0;
   private landVel = 0;
@@ -166,6 +167,7 @@ export class Bot {
     this.heardPos = null;
     this.detour = null;
     this.guarding = false;
+    this.guardYaw = null;
     this.holdYaw = null;
     this.route = null;
     this.walkT = 0;
@@ -493,13 +495,9 @@ export class Bot {
     if (this.holdYaw !== null && !this.target && !this.guarding && this.state === 'advance') {
       this.aimYaw = turnToward(this.aimYaw, this.holdYaw, 2.4 * dt);
     }
-    // 守包：到了站位后面向包点外侧（敌人来路），配合上面的扫视；走动调查时不锁视线
+    // 守包：到了站位后看向敌人来路（已按墙体视线选好方向），配合上面的扫视；走动调查时不锁视线
     if (this.guarding && !this.target && this.state === 'advance' && this.move.pos.distanceTo(this.guardPos) < 150) {
-      const dx = this.move.pos.x - world.bombPos.x;
-      const dz = this.move.pos.z - world.bombPos.z;
-      if (Math.hypot(dx, dz) > 40) {
-        this.aimYaw = turnToward(this.aimYaw, Math.atan2(dx, dz), 2.4 * dt);
-      }
+      this.aimYaw = turnToward(this.aimYaw, this.guardYaw ?? this.aimYaw, 2.4 * dt);
     }
     this.model.group.position.set(this.move.pos.x, this.move.pos.y, this.move.pos.z);
     this.model.group.rotation.y = this.aimYaw;
@@ -679,6 +677,30 @@ export class Bot {
     if (this.guarding) return;
     this.guarding = true;
     this.guardPos.copy(this.pickGuardPos(world));
+    this.guardYaw = this.computeGuardYaw(world);
+  }
+
+  /** 守包朝向：优先面向敌人来路（CT 侧），若被墙挡则搜索一条开阔视线 */
+  private computeGuardYaw(world: BotWorld): number {
+    const map = botWorldMap.get(this);
+    const enemySpawns = map?.spawns.ct;
+    let baseAng = this.aimYaw;
+    if (map && enemySpawns && enemySpawns.length) {
+      const avg = new THREE.Vector3();
+      for (const s of enemySpawns) avg.add(s);
+      avg.divideScalar(enemySpawns.length);
+      baseAng = Math.atan2(avg.x - this.guardPos.x, avg.z - this.guardPos.z);
+    }
+    const eye = new THREE.Vector3(this.guardPos.x, 60, this.guardPos.z);
+    for (let k = 0; k < 10; k++) {
+      const ang = baseAng + (k % 2 === 0 ? 1 : -1) * Math.ceil(k / 2) * 0.35;
+      const dir = new THREE.Vector3(Math.sin(ang), 0, Math.cos(ang));
+      const hit = MovementController.raycastBrushes(world.brushes, eye, dir, 420);
+      if (hit >= 390) return ang; // 这个方向 400 内没墙
+    }
+    // 都挡就面向包点（包点内部通常是开阔的）
+    const toBomb = Math.atan2(world.bombPos.x - this.guardPos.x, world.bombPos.z - this.guardPos.z);
+    return toBomb;
   }
 
   private pickGuardPos(world: BotWorld): THREE.Vector3 {
