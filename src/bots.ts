@@ -438,6 +438,11 @@ export class Bot {
       this.move.vel.x = 0;
       this.move.vel.z = 0;
     }
+    // 装包/拆包时站定，避免轻微移动打断进度
+    if (this.interact) {
+      wishX = 0;
+      wishZ = 0;
+    }
     // 固定子步长积分
     const STEP = 1 / 120;
     let remaining = dt;
@@ -456,8 +461,8 @@ export class Bot {
     } else {
       this.walkT = 0;
     }
-    // 到点持枪警戒：面向敌人来路（如 B 点唯一入口），不再随机乱转
-    if (!this.guarding) {
+    // 到点持枪警戒（仅 CT 防守用）：面向敌人来路（如 B 点唯一入口）；T 无包时应主动猎杀
+    if (!this.guarding && this.team === 'CT') {
       const finalPt = this.path.length ? this.path[this.path.length - 1] : null;
       const arrived =
         !!finalPt &&
@@ -466,7 +471,7 @@ export class Bot {
       if (arrived && !this.target && this.state === 'advance') {
         if (this.holdYaw === null) {
           const map = botWorldMap.get(this);
-          const enemySpawns = this.team === 'T' ? map?.spawns.ct : map?.spawns.t;
+          const enemySpawns = map?.spawns.t; // CT 防守：敌人从 T 家方向来
           if (map && enemySpawns && enemySpawns.length) {
             const avg = new THREE.Vector3();
             for (const sp of enemySpawns) avg.add(sp);
@@ -564,6 +569,20 @@ export class Bot {
 
   private objectivePos(world: BotWorld): THREE.Vector3 {
     if (this.team === 'T') {
+      // 没带包、包也没掉/没装：去猎杀 CT（往敌方一侧推进），而不是守着包点
+      if (!this.hasBomb && !world.bombPlanted && !world.bombDropped) {
+        const map = botWorldMap.get(this);
+        if (map && map.spawns.ct.length) {
+          const avg = new THREE.Vector3();
+          for (const s of map.spawns.ct) avg.add(s);
+          avg.divideScalar(map.spawns.ct.length);
+          const hunt = avg.multiplyScalar(0.55); // 55% 往 CT 家方向，避免直接冲进对方家里
+          const tile = map.nav.worldToTile(hunt);
+          if (map.nav.isWalkable(tile.x, tile.z)) return hunt;
+          const alt = map.nav.nearestWalkable(tile.x, tile.z);
+          if (alt) return map.nav.tileToWorld(alt.x, alt.z);
+        }
+      }
       const site = world.map.sites.find((s) => s.id === this.siteChoice);
       if (site) return site.pos.clone();
     } else {
@@ -585,7 +604,10 @@ export class Bot {
   }
 
   private setTarget(pos: THREE.Vector3) {
-    if (this.repathT > 0 && this.path.length > 1) return;
+    // 目标变化（如掉包/听到枪声）时立即改道，不再等 1.2 秒节流
+    const end = this.path.length ? this.path[this.path.length - 1] : null;
+    const changed = !end || end.distanceToSquared(pos) > 90 * 90;
+    if (!changed && this.repathT > 0 && this.path.length > 1) return;
     if (!this.target || this.target.alive) {
       this.path = worldPath(this, pos);
       this.pathIdx = 0;
