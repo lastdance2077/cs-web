@@ -408,11 +408,13 @@ const MAPS: MapDef[] = [
       g.crate(16, 4); g.crate(19, 3); g.crate(22, 5);
       g.carve(24, 7, 28, 12); // 转角（A 大 → A 点西侧）
       g.crate(25, 9);
+      g.crate(24, 4); // A 大转角掩体
 
       // ===== A 点（右上角，南侧两个入口）=====
       g.carve(27, 8, 38, 16);
       g.site(30, 11, 'A'); g.site(32, 11, 'A'); g.site(34, 11, 'A');
       g.crate(29, 13); g.crate(31, 14); g.crate(34, 12); g.crate(36, 10);
+      g.crate(33, 15); // A 点南侧掩体
 
       // ===== 短道 + 猫道（T → A 点南侧）=====
       g.carve(7, 8, 9, 15);
@@ -425,6 +427,7 @@ const MAPS: MapDef[] = [
       g.crate(10, 10); g.crate(11, 12);
       g.carve(13, 10, 18, 20);
       g.crate(14, 12); g.crate(16, 15); g.crate(15, 18);
+      g.crate(17, 11); g.crate(15, 13); // 中路掩体
       g.fill(10, 16, 18, 16); // 中路隔墙
       g.carve(17, 16, 17, 16); // 隔墙右门
       g.carve(19, 17, 22, 20); // CT 中
@@ -442,6 +445,7 @@ const MAPS: MapDef[] = [
       g.carve(1, 21, 13, 33);
       g.site(4, 24, 'B'); g.site(6, 24, 'B'); g.site(8, 24, 'B');
       g.crate(3, 26); g.crate(6, 28); g.crate(9, 26); g.crate(11, 30); g.crate(2, 31);
+      g.crate(7, 31); g.crate(10, 25); // B 点掩体
       g.fill(1, 20, 13, 20); // 北墙
       g.carve(7, 20, 8, 20); // 北门（B 洞下层）
       g.fill(13, 21, 13, 33); // 东墙
@@ -481,11 +485,13 @@ const MAPS: MapDef[] = [
       g.crate(16, 8); g.crate(18, 10);
       g.carve(13, 12, 20, 16); // 中央仓库
       g.crate(15, 14); g.crate(18, 13);
+      g.crate(14, 13); g.crate(19, 15); // 仓库掩体
 
       // ===== A 点（右上，“上层”）=====
       g.carve(22, 7, 34, 16);
       g.site(25, 11, 'A'); g.site(27, 11, 'A'); g.site(29, 11, 'A');
       g.crate(24, 13); g.crate(27, 14); g.crate(30, 12); g.crate(32, 9);
+      g.crate(23, 13); // A 点入口掩体
       // A 点西门（仓库 → A）
       g.carve(21, 12, 21, 14);
 
@@ -493,6 +499,7 @@ const MAPS: MapDef[] = [
       g.carve(1, 17, 12, 29);
       g.site(4, 22, 'B'); g.site(6, 22, 'B'); g.site(8, 22, 'B');
       g.crate(3, 24); g.crate(6, 26); g.crate(9, 24); g.crate(11, 27);
+      g.crate(2, 27); // B 点角落掩体
       // B 点北墙与东墙
       g.fill(1, 16, 12, 16);
       g.fill(12, 17, 12, 29);
@@ -541,6 +548,7 @@ const MAPS: MapDef[] = [
       g.carve(27, 4, 38, 14);
       g.site(30, 8, 'A'); g.site(32, 8, 'A'); g.site(34, 8, 'A');
       g.crate(29, 10); g.crate(31, 12); g.crate(34, 11); g.crate(36, 6);
+      g.crate(29, 13); g.crate(27, 7); // A 点掩体
       // A 点西侧：宫殿入口（x26-27, z6-8）
       // A 点南墙：连接器入口
       g.carve(27, 15, 30, 15);
@@ -548,6 +556,7 @@ const MAPS: MapDef[] = [
       // ===== 中路（T → CT 中，带隔墙）=====
       g.carve(13, 7, 17, 22);
       g.crate(15, 9); g.crate(14, 12); g.crate(16, 15); g.crate(15, 19);
+      g.crate(17, 11); // 中路掩体
       g.fill(13, 16, 16, 16);
       g.carve(17, 16, 17, 16); // 隔墙门
       g.carve(18, 17, 22, 21); // CT 中
@@ -569,6 +578,7 @@ const MAPS: MapDef[] = [
       g.carve(1, 21, 13, 33);
       g.site(4, 24, 'B'); g.site(6, 24, 'B'); g.site(8, 24, 'B');
       g.crate(3, 26); g.crate(6, 28); g.crate(9, 26); g.crate(11, 30); g.crate(2, 31);
+      g.crate(9, 28); // B 点掩体
       g.fill(1, 20, 13, 20); // 北墙
       g.carve(12, 20, 12, 20); // 北门（公寓 → B）
       g.fill(13, 21, 13, 33); // 东墙

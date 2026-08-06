@@ -260,54 +260,135 @@ export function buildWorldScene(map: CompiledMap) {
     return tex;
   };
 
-  const groundTex = canvasTex(128, 128, (ctx) => {
-    ctx.fillStyle = '#9a937c';
-    ctx.fillRect(0, 0, 128, 128);
-    ctx.fillStyle = '#8f8872';
-    for (let y = 0; y < 128; y += 32) {
-      for (let x = 0; x < 128; x += 32) {
-        if (((x + y) / 32) % 2 === 0) ctx.fillRect(x, y, 32, 32);
-      }
-    }
-    ctx.strokeStyle = 'rgba(60,55,40,0.3)';
-    ctx.strokeRect(0.5, 0.5, 127, 127);
-  });
-  groundTex.repeat.set(Math.round(map.groundSize / 64), Math.round(map.groundSize / 64));
+  const theme = map.def.id;
+  // 每张图的主题色板
+  const pal =
+    theme === 'nuke'
+      ? { ground: '#70777e', groundDark: '#5d646b', wall: '#868e95', wallLight: '#959da4', wallDark: '#6c737a', crate: '#5b5348', grout: 'rgba(40,44,50,0.4)' }
+      : theme === 'mirage'
+        ? { ground: '#dccca6', groundDark: '#c8b892', wall: '#d9caa6', wallLight: '#e4d6b4', wallDark: '#c5b68f', crate: '#8a6a3c', grout: 'rgba(120,100,60,0.35)' }
+        : { ground: '#c5b387', groundDark: '#b19f74', wall: '#c2b087', wallLight: '#d0bf97', wallDark: '#ab9a72', crate: '#7a5a34', grout: 'rgba(90,75,45,0.35)' };
 
-  const wallTex = canvasTex(128, 128, (ctx) => {
-    ctx.fillStyle = '#9b8f76';
-    ctx.fillRect(0, 0, 128, 128);
-    ctx.fillStyle = '#a89b80';
-    for (let row = 0; row < 4; row++) {
-      const y = row * 32;
-      const off = row % 2 === 0 ? 0 : 32;
-      for (let x = -32; x < 160; x += 64) {
-        ctx.fillRect(x + off + 3, y + 3, 58, 26);
-      }
+  // 工具：随机颗粒噪点
+  const speckle = (ctx: CanvasRenderingContext2D, w: number, h: number, alpha: number) => {
+    for (let i = 0; i < w * h * 0.2; i++) {
+      const x = Math.random() * w;
+      const y = Math.random() * h;
+      const v = Math.floor(Math.random() * 255);
+      ctx.fillStyle = `rgba(${v},${v},${v},${alpha})`;
+      ctx.fillRect(x, y, 1.3, 1.3);
     }
-    ctx.strokeStyle = 'rgba(70,60,40,0.45)';
+  };
+  // 工具：柔和色斑
+  const blotches = (ctx: CanvasRenderingContext2D, w: number, h: number, color: string, count: number, rMin: number, rMax: number, alpha: number) => {
+    for (let i = 0; i < count; i++) {
+      const x = Math.random() * w;
+      const y = Math.random() * h;
+      const r = rMin + Math.random() * (rMax - rMin);
+      const g = ctx.createRadialGradient(x, y, 0, x, y, r);
+      g.addColorStop(0, color);
+      g.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.globalAlpha = alpha;
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.arc(x, y, r, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.globalAlpha = 1;
+    }
+  };
+  // 工具：裂纹折线
+  const cracks = (ctx: CanvasRenderingContext2D, w: number, h: number, color: string, count: number) => {
+    ctx.strokeStyle = color;
     ctx.lineWidth = 1;
-    for (let y = 0; y <= 128; y += 32) {
+    for (let i = 0; i < count; i++) {
+      let x = Math.random() * w;
+      let y = Math.random() * h;
       ctx.beginPath();
-      ctx.moveTo(0, y + 0.5);
-      ctx.lineTo(128, y + 0.5);
+      ctx.moveTo(x, y);
+      const segs = 3 + Math.floor(Math.random() * 4);
+      for (let s = 0; s < segs; s++) {
+        x += (Math.random() - 0.5) * 30;
+        y += (Math.random() - 0.5) * 30;
+        ctx.lineTo(x, y);
+      }
       ctx.stroke();
+    }
+  };
+
+  const groundTex = canvasTex(256, 256, (ctx) => {
+    ctx.fillStyle = pal.ground;
+    ctx.fillRect(0, 0, 256, 256);
+    blotches(ctx, 256, 256, pal.groundDark, 12, 30, 95, 0.4);
+    blotches(ctx, 256, 256, '#ffffff', 7, 18, 55, 0.07);
+    speckle(ctx, 256, 256, 0.45);
+    cracks(ctx, 256, 256, 'rgba(40,40,40,0.22)', theme === 'nuke' ? 5 : 3);
+    if (theme === 'nuke') {
+      // 混凝土伸缩缝
+      ctx.strokeStyle = 'rgba(45,50,58,0.4)';
+      ctx.lineWidth = 2;
+      for (let gx = 0; gx <= 256; gx += 128) {
+        ctx.beginPath(); ctx.moveTo(gx, 0); ctx.lineTo(gx, 256); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(0, gx); ctx.lineTo(256, gx); ctx.stroke();
+      }
     }
   });
+  groundTex.repeat.set(Math.round(map.groundSize / 96), Math.round(map.groundSize / 96));
 
-  const crateTex = canvasTex(128, 128, (ctx) => {
-    ctx.fillStyle = '#7a5a34';
-    ctx.fillRect(0, 0, 128, 128);
-    ctx.fillStyle = '#8a683e';
-    for (let x = 0; x < 128; x += 16) ctx.fillRect(x, 0, 10, 128);
-    ctx.strokeStyle = 'rgba(40,28,15,0.65)';
-    ctx.lineWidth = 2;
-    for (let x = 0; x <= 128; x += 16) {
-      ctx.beginPath();
-      ctx.moveTo(x, 0);
-      ctx.lineTo(x, 128);
-      ctx.stroke();
+  const wallTex = canvasTex(256, 256, (ctx) => {
+    ctx.fillStyle = pal.wall;
+    ctx.fillRect(0, 0, 256, 256);
+    if (theme === 'nuke') {
+      // 大型混凝土墙板 + 接缝
+      ctx.strokeStyle = 'rgba(45,50,58,0.5)';
+      ctx.lineWidth = 2;
+      for (let gx = 0; gx <= 256; gx += 128) {
+        ctx.beginPath(); ctx.moveTo(gx, 0); ctx.lineTo(gx, 256); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(0, gx); ctx.lineTo(256, gx); ctx.stroke();
+      }
+      blotches(ctx, 256, 256, 'rgba(35,40,48,0.16)', 10, 20, 60, 1);
+      blotches(ctx, 256, 256, 'rgba(140,150,160,0.18)', 6, 20, 50, 1);
+    } else {
+      // 砖/石砌块（错缝）
+      for (let row = 0; row < 8; row++) {
+        const y = row * 32;
+        const off = row % 2 === 0 ? 0 : 32;
+        for (let x = -32; x < 288; x += 64) {
+          ctx.fillStyle = row % 2 === 0 ? pal.wallLight : pal.wallDark;
+          ctx.fillRect(x + off + 2, y + 2, 60, 28);
+        }
+      }
+      ctx.strokeStyle = pal.grout;
+      ctx.lineWidth = 1.5;
+      for (let y = 0; y <= 256; y += 32) {
+        ctx.beginPath(); ctx.moveTo(0, y + 0.5); ctx.lineTo(256, y + 0.5); ctx.stroke();
+      }
     }
+    speckle(ctx, 256, 256, 0.5);
+    blotches(ctx, 256, 256, 'rgba(0,0,0,0.12)', 8, 25, 70, 1);
+    cracks(ctx, 256, 256, 'rgba(30,30,30,0.25)', theme === 'nuke' ? 6 : 3);
+  });
+
+  const crateTex = canvasTex(256, 256, (ctx) => {
+    ctx.fillStyle = pal.crate;
+    ctx.fillRect(0, 0, 256, 256);
+    // 横向木板
+    for (let y = 0; y < 256; y += 32) {
+      ctx.fillStyle = y % 64 === 0 ? '#00000014' : '#ffffff10';
+      ctx.fillRect(0, y, 256, 30);
+    }
+    ctx.strokeStyle = 'rgba(0,0,0,0.5)';
+    ctx.lineWidth = 2;
+    for (let y = 0; y <= 256; y += 32) {
+      ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(256, y); ctx.stroke();
+    }
+    // 竖向支撑 + 铆钉
+    ctx.fillStyle = 'rgba(0,0,0,0.25)';
+    for (let x = 0; x <= 256; x += 64) ctx.fillRect(x, 0, 8, 256);
+    ctx.fillStyle = 'rgba(255,255,255,0.18)';
+    for (let x = 4; x <= 256; x += 64) {
+      for (let y = 4; y <= 256; y += 32) ctx.fillRect(x, y, 4, 4);
+    }
+    speckle(ctx, 256, 256, 0.4);
   });
 
   const groundMat = new THREE.MeshLambertMaterial({ map: groundTex });
@@ -315,11 +396,14 @@ export function buildWorldScene(map: CompiledMap) {
   const crateMat = new THREE.MeshLambertMaterial({ map: crateTex });
 
   // ---- 渐变天空 ----
+  const skyTop = theme === 'nuke' ? '#5d6b78' : theme === 'mirage' ? '#7fb2dc' : '#6fa8d8';
+  const skyMid = theme === 'nuke' ? '#7f8b94' : theme === 'mirage' ? '#b7d4ec' : '#a9cde8';
+  const skyLow = theme === 'nuke' ? '#99a2a6' : theme === 'mirage' ? '#e4dcc8' : '#e6ddc4';
   const skyTex = canvasTex(16, 256, (ctx) => {
     const grad = ctx.createLinearGradient(0, 0, 0, 256);
-    grad.addColorStop(0, '#6fa8d8');
-    grad.addColorStop(0.5, '#a9cde8');
-    grad.addColorStop(1, '#e6ddc4');
+    grad.addColorStop(0, skyTop);
+    grad.addColorStop(0.5, skyMid);
+    grad.addColorStop(1, skyLow);
     ctx.fillStyle = grad;
     ctx.fillRect(0, 0, 16, 256);
   });
