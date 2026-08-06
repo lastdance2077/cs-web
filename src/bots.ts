@@ -345,8 +345,8 @@ export class Bot {
     // ---- 状态机 ----
     const isCarrier = this.team === 'T' && this.hasBomb && !world.bombPlanted;
     const distToTarget = this.target ? this.move.pos.distanceTo(this.target.pos) : Infinity;
-    // 带包者以装包为第一要务：远处的敌人不恋战，冲到包点再说
-    if (this.target && this.reactionT <= 0 && !(isCarrier && distToTarget > 380)) {
+    // 带包者以装包为第一要务：除非敌人贴脸（<200）或时间紧急，否则不恋战，冲去包点
+    if (this.target && this.reactionT <= 0 && !(isCarrier && distToTarget > 200)) {
       this.state = 'combat';
     } else if (this.team === 'T' && world.bombPlanted) {
       this.state = 'advance'; // 守包：散开到包点四周，面向敌人来路

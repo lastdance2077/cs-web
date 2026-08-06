@@ -71,6 +71,9 @@ export class Game {
   private paused = false;
   private lastLockExit = 0;
   private spectateBot: Bot | null = null;
+  private spectateCamPos = new THREE.Vector3(0, 900, 0);
+  private spectateYaw = 0;
+  private spectatePitch = -0.5;
   private projectiles: NadeProjectile[] = [];
   private smokes: Array<{ pos: THREE.Vector3; radius: number; t: number; group: THREE.Group }> = [];
   private fires: Array<{ pos: THREE.Vector3; radius: number; t: number; group: THREE.Group; flames: THREE.Mesh[]; disc: THREE.Mesh; tickT: number; light: THREE.PointLight; owner: string }> = [];
@@ -561,80 +564,61 @@ export class Game {
     void dt;
   }
 
-  // ---------- 死亡后队友视角 ----------
+  // ---------- 死亡后上帝视角（自由飞行） ----------
 
   private startSpectate() {
     this.player.viewmodel.visible = false;
     for (const c of this.player.camera.children) {
       if ((c as THREE.Sprite).isSprite) c.visible = false;
     }
-    // 观战时不再显示“你已阵亡”遮罩
-    this.el.death.style.display = 'none';
     this.player.camera.fov = 68;
     this.player.camera.updateProjectionMatrix();
-    const mates = this.bots.filter((b) => b.team === this.player.team && b.alive);
-    if (!mates.length) {
-      this.spectateBot = null;
-      return;
-    }
-    // 优先观战距离自己最近的队友
-    mates.sort(
-      (a, b) =>
-        a.move.pos.distanceToSquared(this.player.move.pos) -
-        b.move.pos.distanceToSquared(this.player.move.pos),
+    // 上帝视角初始位置：死亡点上空俯瞰战场
+    this.spectateCamPos.set(
+      this.player.move.pos.x,
+      Math.max(260, this.player.move.pos.y + 220),
+      this.player.move.pos.z,
     );
-    this.spectateBot = mates[0];
-  }
-
-  private cycleSpectate() {
-    const mates = this.bots.filter((b) => b.team === this.player.team && b.alive);
-    if (!mates.length) {
-      this.spectateBot = null;
-      return;
-    }
-    if (!this.spectateBot || !this.spectateBot.alive) {
-      this.spectateBot = mates[0];
-      return;
-    }
-    const idx = mates.indexOf(this.spectateBot);
-    this.spectateBot = mates[(idx + 1) % mates.length];
+    this.spectateYaw = this.player.yaw;
+    this.spectatePitch = -0.5;
   }
 
   private updateSpectate(dt: number) {
+    // 鼠标转视角
+    const sens = FEEL.mouseSens;
+    this.spectateYaw -= this.input.mouseDX * sens;
+    this.spectatePitch = Math.max(-1.5, Math.min(1.5, this.spectatePitch - this.input.mouseDY * sens));
     this.input.mouseDX = 0;
     this.input.mouseDY = 0;
-    const mates = this.bots.filter((b) => b.team === this.player.team && b.alive);
-    if (!mates.length) {
-      this.spectateBot = null;
-      // 没有队友可看时，恢复阵亡提示
-      this.el.death.style.display = 'flex';
-      this.pitchLookOnly(dt);
-      return;
+    // WASD 移动 / 空格上升 / Ctrl 下降 / Shift 加速
+    const cy = Math.cos(this.spectatePitch);
+    const fwd = new THREE.Vector3(-Math.sin(this.spectateYaw) * cy, Math.sin(this.spectatePitch), -Math.cos(this.spectateYaw) * cy);
+    const right = new THREE.Vector3(Math.cos(this.spectateYaw), 0, -Math.sin(this.spectateYaw));
+    const move = new THREE.Vector3();
+    const keys = this.input.keys;
+    if (keys.has('KeyW')) move.add(fwd);
+    if (keys.has('KeyS')) move.sub(fwd);
+    if (keys.has('KeyD')) move.add(right);
+    if (keys.has('KeyA')) move.sub(right);
+    if (keys.has('Space')) move.y += 1;
+    if (keys.has('ControlLeft') || keys.has('ControlRight')) move.y -= 1;
+    if (move.lengthSq() > 0.001) {
+      move.normalize();
+      const speed = 750 * (keys.has('ShiftLeft') || keys.has('ShiftRight') ? 2.4 : 1);
+      this.spectateCamPos.addScaledVector(move, speed * dt);
     }
-    if (!this.spectateBot || !this.spectateBot.alive) {
-      this.spectateBot = mates[0];
-    }
+    // 限制在地图范围内
+    const halfW = (this.map.def.w * this.map.def.tile) / 2;
+    const halfH = (this.map.def.h * this.map.def.tile) / 2;
+    this.spectateCamPos.x = Math.max(-halfW, Math.min(halfW, this.spectateCamPos.x));
+    this.spectateCamPos.z = Math.max(-halfH, Math.min(halfH, this.spectateCamPos.z));
+    this.spectateCamPos.y = Math.max(24, Math.min(halfH * 1.4, this.spectateCamPos.y));
     const cam = this.player.camera;
-    // 位置平滑跟随，避免把 Bot 跑动/拉扯的微抖动原样搬过来
-    cam.position.lerp(this.spectateBot.eyePos, Math.min(1, dt * 12));
+    cam.position.copy(this.spectateCamPos);
     cam.rotation.order = 'YXZ';
-    // 平滑跟随视线：限速缓动，避免把 Bot 的快速转向/抖动原样抖出来
-    const targetYaw = this.spectateBot.viewYaw;
-    const targetPitch = this.spectateBot.viewPitch;
-    let dy = targetYaw - cam.rotation.y;
-    while (dy > Math.PI) dy -= Math.PI * 2;
-    while (dy < -Math.PI) dy += Math.PI * 2;
-    const yawRate = 2.2;
-    cam.rotation.y += Math.max(-yawRate * dt, Math.min(yawRate * dt, dy));
-    const pitchRate = 1.8;
-    const dp = targetPitch - cam.rotation.x;
-    cam.rotation.x += Math.max(-pitchRate * dt, Math.min(pitchRate * dt, dp));
+    cam.rotation.y = this.spectateYaw;
+    cam.rotation.x = this.spectatePitch;
     cam.rotation.z = 0;
-    // 队友开镜时跟随缩放
-    const bw = this.spectateBot.weapon;
-    const targetFov = bw.scoped && bw.def.zoom ? bw.def.zoom : 68;
-    cam.fov += (targetFov - cam.fov) * Math.min(1, FEEL.zoomSpeed * dt);
-    cam.updateProjectionMatrix();
   }
 
   private buildEnemyRefs(team: Team): EnemyRef[] {
@@ -1610,7 +1594,7 @@ export class Game {
         <div id="scoreboard-title">计分板</div>
         <div id="scoreboard-body"></div>
       </div>
-      <div id="death-overlay">你已阵亡<br/><small>正在观战队友 · 点击鼠标切换队友视角</small></div>
+      <div id="death-overlay">你已阵亡<br/><small>上帝视角观战 · WASD 移动 · 空格上升 / Ctrl 下降 · Shift 加速 · 鼠标转视角</small></div>
       <div id="pause-overlay">
         <h2>已暂停</h2>
         <button id="resume-btn">继续游戏</button>
@@ -1975,7 +1959,6 @@ export class Game {
 
   private onMouseDown = (e: MouseEvent) => {
     if (!this.player.alive) {
-      if (e.button === 0) this.cycleSpectate();
       return;
     }
     if (e.button === 0) this.input.fire = true;
