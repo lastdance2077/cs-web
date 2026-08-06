@@ -470,15 +470,15 @@ const MAPS: MapDef[] = [
     tile: 96,
     build(g) {
       // ===== T 出生点（顶部中央，封闭）=====
-      g.carve(14, 1, 22, 5);
-      g.spawn(15, 2, 'T'); g.spawn(17, 2, 'T'); g.spawn(19, 2, 'T');
-      g.spawn(16, 4, 'T'); g.spawn(18, 4, 'T');
+      g.carve(12, 1, 20, 5);
+      g.spawn(13, 2, 'T'); g.spawn(15, 2, 'T'); g.spawn(17, 2, 'T');
+      g.spawn(14, 4, 'T'); g.spawn(16, 4, 'T');
       // T 出口：南→斜坡（A/B 都经仓库到达）
-      g.carve(16, 6, 20, 6);
+      g.carve(14, 6, 18, 6);
 
       // ===== 斜坡（T → 中央仓库）=====
-      g.carve(16, 7, 20, 11);
-      g.crate(17, 8); g.crate(19, 10);
+      g.carve(14, 7, 20, 11);
+      g.crate(16, 8); g.crate(18, 10);
       g.carve(13, 12, 20, 16); // 中央仓库
       g.crate(15, 14); g.crate(18, 13);
 

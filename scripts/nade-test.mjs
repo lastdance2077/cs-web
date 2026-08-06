@@ -72,13 +72,16 @@ try {
     }
   });
 
-  // 高爆：选中 → 按住 0.5s → 松手
+  // 高爆：选中 → 按住 → 松手投掷
   await page.evaluate(() => { const g = window.__game; g.nadeSelect = 'he'; g.prevSlot = g.player.currentSlot; });
   const sel = await page.evaluate(() => window.__game.nadeSelect);
   check('选中投掷物(he)', sel === 'he', String(sel));
   await page.evaluate(() => { window.__game.input.fire = true; });
-  await sleep(500);
+  await sleep(120);
   await page.evaluate(() => { window.__game.input.fire = false; });
+  await sleep(150);
+  const thrown = await page.evaluate(() => ({ count: window.__game.projectiles.length, nades: { ...window.__game.player.nades }, select: window.__game.nadeSelect }));
+  check('松手投掷高爆，数量-1', thrown.count === 1 && thrown.nades.he === 0, JSON.stringify(thrown));
   await sleep(300);
   // 把玩家移出爆炸范围，避免自己被反弹的高爆炸死
   await page.evaluate(() => {
@@ -87,8 +90,6 @@ try {
     g.player.alive = true;
     g.player.move.pos.set(0, 0, -900);
   });
-  const thrown = await page.evaluate(() => ({ count: window.__game.projectiles.length, nades: { ...window.__game.player.nades }, select: window.__game.nadeSelect }));
-  check('松手投掷高爆，数量-1', thrown.count === 1 && thrown.nades.he === 0, JSON.stringify(thrown));
   await sleep(2500);
   const heResult = await page.evaluate(() => {
     const g = window.__game;

@@ -82,8 +82,9 @@ export class Game {
   private traj: THREE.Points | null = null;
   private trajMarker: THREE.Mesh | null = null;
   private dotTex: THREE.Texture | null = null;
+  private bombBeacon: THREE.Mesh | null = null;
+  private bombLight: THREE.PointLight | null = null;
   private nadeSelect: NadeType | null = null;
-  private nadeCookT = 0;
   private prevFire = false;
   private prevSlot: 'primary' | 'secondary' | 'melee' = 'secondary';
   private flashOverlay = 0;
@@ -248,8 +249,14 @@ export class Game {
     this.el.buyMenu.style.display = 'none';
     // 清空上一回合的投掷物/烟雾/火焰
     this.nadeSelect = null;
-    this.nadeCookT = 0;
     this.flashOverlay = 0;
+    for (const pr of this.projectiles) {
+      if (pr.mesh) {
+        this.scene.remove(pr.mesh);
+        pr.mesh.geometry.dispose();
+        (pr.mesh.material as THREE.Material).dispose();
+      }
+    }
     this.projectiles.length = 0;
     for (const s of this.smokes) {
       this.scene.remove(s.group);
@@ -409,6 +416,14 @@ export class Game {
   }
 
   private showMatchOver() {
+    // 释放鼠标锁定，让“再来一局/返回主菜单”可点击
+    if (document.pointerLockElement) {
+      try {
+        document.exitPointerLock();
+      } catch {
+        /* 忽略 */
+      }
+    }
     const winner: Team = this.score.t >= MATCH.winScore ? 'T' : 'CT';
     this.banner('比赛结束', `${winner} 阵营以 ${this.score.t}:${this.score.ct} 获胜`);
     // 最终计分板
@@ -505,7 +520,7 @@ export class Game {
       }
       if (bot.actions.nade) {
         const nd = bot.actions.nade;
-        this.projectiles.push(new NadeProjectile(nd.type, bot.team, bot.name, bot.eyePos, nd.dir, bot.move.vel, nd.cook));
+        this.spawnProjectile(nd.type, bot.team, bot.name, bot.eyePos, nd.dir, bot.move.vel);
         sfx.play('nade_throw');
         this.noiseEvents.push({ pos: bot.move.pos.clone(), radius: 1400, team: bot.team });
         bot.actions.nade = null;
@@ -547,6 +562,7 @@ export class Game {
     this.updateEmbers(dt);
     this.updateVisionOverlays(dt);
     this.updateTrajectory();
+    this.updateBombBeacon();
     this.drawMinimap();
     this.updateHud(dt);
   }
@@ -571,6 +587,8 @@ export class Game {
     for (const c of this.player.camera.children) {
       if ((c as THREE.Sprite).isSprite) c.visible = false;
     }
+    // 观战时隐藏“你已阵亡”提示，避免遮挡上帝视角
+    this.el.death.style.display = 'none';
     this.player.camera.fov = 68;
     this.player.camera.updateProjectionMatrix();
     // 上帝视角初始位置：死亡点上空俯瞰战场
@@ -1073,12 +1091,41 @@ export class Game {
 
   private updateProjectiles(dt: number) {
     for (let i = this.projectiles.length - 1; i >= 0; i--) {
-      const det = this.projectiles[i].update(dt, this.map.brushes);
+      const pr = this.projectiles[i];
+      if (pr.mesh) {
+        pr.mesh.position.copy(pr.pos);
+        pr.mesh.rotation.y += dt * 9;
+        pr.mesh.rotation.x += dt * 5;
+      }
+      const det = pr.update(dt, this.map.brushes);
       if (det) {
+        if (pr.mesh) {
+          this.scene.remove(pr.mesh);
+          pr.mesh.geometry.dispose();
+          (pr.mesh.material as THREE.Material).dispose();
+        }
         this.projectiles.splice(i, 1);
         this.applyDetonation(det);
       }
     }
+  }
+
+  /** 生成投掷物 + 飞行可见模型 */
+  private spawnProjectile(
+    type: NadeType,
+    team: Team,
+    owner: string,
+    origin: THREE.Vector3,
+    dir: THREE.Vector3,
+    carryVel: THREE.Vector3,
+  ) {
+    const pr = new NadeProjectile(type, team, owner, origin, dir, carryVel, 0);
+    const colors: Record<NadeType, number> = { he: 0x2f7d2f, flash: 0xe8e8e8, smoke: 0x9a9a9a, molotov: 0xc05a24 };
+    pr.mesh = new THREE.Mesh(new THREE.SphereGeometry(4, 10, 8), new THREE.MeshLambertMaterial({ color: colors[type] }));
+    pr.mesh.position.copy(pr.pos);
+    this.scene.add(pr.mesh);
+    this.projectiles.push(pr);
+    return pr;
   }
 
   private applyDetonation(det: Detonation) {
@@ -1324,7 +1371,7 @@ export class Game {
     }
     const dir = new THREE.Vector3();
     p.camera.getWorldDirection(dir);
-    const points = simulateNadePath(this.nadeSelect, p.eyePosition, dir, p.move.vel, this.nadeCookT, this.map.brushes);
+    const points = simulateNadePath(this.nadeSelect, p.eyePosition, dir, p.move.vel, 0, this.map.brushes);
     if (points.length < 2) {
       this.clearTrajectory();
       return;
@@ -1381,6 +1428,37 @@ export class Game {
     return new THREE.CanvasTexture(c);
   }
 
+  /** 掉包/装包时显示脉冲红环信标，方便找到炸弹 */
+  private updateBombBeacon() {
+    const show = this.bomb.planted ? this.bomb.pos : this.bomb.dropped;
+    if (show && this.phase === 'live') {
+      if (!this.bombBeacon) {
+        this.bombBeacon = new THREE.Mesh(
+          new THREE.RingGeometry(20, 30, 28),
+          new THREE.MeshBasicMaterial({ color: 0xff3333, transparent: true, opacity: 0.85, side: THREE.DoubleSide, depthWrite: false }),
+        );
+        this.bombBeacon.rotation.x = -Math.PI / 2;
+        this.scene.add(this.bombBeacon);
+        this.bombLight = new THREE.PointLight(0xff2222, 1.5, 420, 2);
+        this.scene.add(this.bombLight);
+      }
+      const pulse = 1 + Math.sin(performance.now() / 200) * 0.15;
+      this.bombBeacon.position.set(show.x, 2, show.z);
+      this.bombBeacon.scale.setScalar(pulse);
+      this.bombBeacon.visible = true;
+      this.bombLight!.position.set(show.x, 40, show.z);
+      this.bombLight!.intensity = 1.2 + Math.sin(performance.now() / 180) * 0.5;
+      this.bombLight!.visible = true;
+      this.bomb.mesh.scale.setScalar(1.6);
+    } else {
+      if (this.bombBeacon) {
+        this.bombBeacon.visible = false;
+        this.bombLight!.visible = false;
+      }
+      this.bomb.mesh.scale.setScalar(1);
+    }
+  }
+
   private updateVisionOverlays(dt: number) {
     this.flashOverlay = Math.max(0, this.flashOverlay - dt * 0.42);
     this.el.flashOverlay.style.opacity = String(Math.min(1, this.flashOverlay * 1.2));
@@ -1403,29 +1481,26 @@ export class Game {
     if (!this.nadeSelect) this.prevSlot = p.currentSlot;
     const i = owned.indexOf(this.nadeSelect ?? owned[owned.length - 1]);
     this.nadeSelect = owned[(i + 1) % owned.length];
-    this.nadeCookT = 0;
     sfx.play('nade_pull');
   }
 
   private deselectNade() {
     if (this.nadeSelect) {
       this.nadeSelect = null;
-      this.nadeCookT = 0;
     }
   }
 
   private updateNades(dt: number) {
     const p = this.player;
     if (this.nadeSelect && p.alive && this.phase === 'live') {
-      if (this.input.fire) this.nadeCookT = Math.min(1.6, this.nadeCookT + dt);
-      if (this.prevFire && !this.input.fire && this.nadeCookT > 0) {
-        this.throwNade(this.nadeSelect, this.nadeCookT);
-      }
+      // 按住左键准备，松手投掷（固定引信，不会瞬爆）
+      if (this.prevFire && !this.input.fire) this.throwNade(this.nadeSelect);
     }
     this.prevFire = this.input.fire;
+    void dt;
   }
 
-  private throwNade(type: NadeType, cook: number) {
+  private throwNade(type: NadeType) {
     const p = this.player;
     if (p.nades[type] <= 0) {
       this.deselectNade();
@@ -1434,10 +1509,9 @@ export class Game {
     p.nades[type]--;
     const dir = new THREE.Vector3();
     p.camera.getWorldDirection(dir);
-    this.projectiles.push(new NadeProjectile(type, p.team, p.name, p.eyePosition, dir, p.move.vel, cook));
+    this.spawnProjectile(type, p.team, p.name, p.eyePosition, dir, p.move.vel);
     sfx.play('nade_throw');
     this.noiseEvents.push({ pos: p.move.pos.clone(), radius: 1400, team: p.team });
-    this.nadeCookT = 0;
     this.deselectNade();
     p.switchSlot(this.prevSlot);
   }
@@ -1665,7 +1739,7 @@ export class Game {
     if (this.nadeSelect) {
       const nd = NADES[this.nadeSelect];
       this.el.ammo.textContent = `×${p.nades[this.nadeSelect]}`;
-      this.el.weaponName.textContent = `${nd.name} · 按住左键蓄力，松手投掷`;
+      this.el.weaponName.textContent = `${nd.name} · 按住左键 · 松手投掷`;
     } else {
       this.el.ammo.textContent = w.isKnife ? '∞' : `${w.ammoInMag} / ${w.reserve}`;
       this.el.weaponName.textContent = w.def.name;
@@ -1673,12 +1747,6 @@ export class Game {
     // 投掷物计数
     this.el.nadeHud.textContent =
       `G 投掷物｜高爆×${p.nades.he} 闪光×${p.nades.flash} 烟×${p.nades.smoke} 火×${p.nades.molotov}`;
-    // 蓄力条
-    const cooking = !!this.nadeSelect && this.input.fire;
-    this.el.nadeCook.style.display = cooking ? 'block' : 'none';
-    if (cooking) {
-      this.el.nadeCookBar.style.width = `${Math.min(100, (this.nadeCookT / 1.6) * 100)}%`;
-    }
     this.el.bombIcon.classList.toggle('hidden', !p.hasBomb);
 
     // 双方存活状态（顶部）

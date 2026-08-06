@@ -43,6 +43,8 @@ export class NadeProjectile {
   vel = new THREE.Vector3();
   life = 0;
   stopped = false;
+  /** 飞行中的可见模型（由游戏层挂载） */
+  mesh: THREE.Mesh | null = null;
   private armed = false;
   private detonated = false;
   private fuse: number;
@@ -97,7 +99,7 @@ export class NadeProjectile {
       if (this.hitSurface || this.life >= d.fuse) return this.detonate();
       return null;
     }
-    // HE / 闪光：撞到表面（引信已走）或引信到点就爆
+    // HE / 闪光：CS 规则——引信从出手计时，撞到表面（保险期后）即爆，否则引信走完空爆
     if ((this.hitSurface || this.life >= this.fuse) && this.life > 0.35) return this.detonate();
     return null;
   }
@@ -200,8 +202,10 @@ export function simulateNadePath(
       if (t > 4) break;
     } else if (type === 'smoke') {
       if (hitSurface || t >= d.fuse) break;
-    } else if (t >= fuse) {
-      break; // 高爆/闪光：引信到点
+    } else {
+      // 高爆/闪光：保险期后撞到表面即爆，否则引信走完空爆
+      if (t > 0.35 && hitSurface) break;
+      if (t >= fuse) break;
     }
   }
   return points;
