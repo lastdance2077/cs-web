@@ -89,6 +89,8 @@ export class Game {
   private nadeSelect: NadeType | null = null;
   private prevFire = false;
   private prevSlot: 'primary' | 'secondary' | 'melee' = 'secondary';
+  private playerStepT = 0;
+  private botStepAcc = new WeakMap<Bot, number>();
   private flashOverlay = 0;
   private minimap!: HTMLCanvasElement;
   private minimapCtx!: CanvasRenderingContext2D;
@@ -490,6 +492,7 @@ export class Game {
       this.handlePlayerShoot();
       this.handlePlayerInteract();
       this.updateNades(dt);
+      this.emitPlayerFootsteps(dt);
     } else {
       // 死亡后进入队友视角（无队友时自由视角）
       this.updateSpectate(dt);
@@ -518,6 +521,7 @@ export class Game {
       }
       const enemies = bot.team === 'T' ? enemiesOfT : enemiesOfCT;
       bot.update(dt, world, enemies);
+      this.emitBotFootsteps(bot, dt);
       if (bot.actions.shot) {
         this.resolveShot(bot.actions.shot.origin, bot.actions.shot.dir, bot.team, bot);
         this.noiseEvents.push({ pos: bot.move.pos.clone(), radius: 2600, team: bot.team });
@@ -1490,6 +1494,40 @@ export class Game {
   private deselectNade() {
     if (this.nadeSelect) {
       this.nadeSelect = null;
+    }
+  }
+
+  /** 玩家脚步声：按步行节奏产生小范围噪声，敌方人机会听到并查看；静步更轻 */
+  private emitPlayerFootsteps(dt: number) {
+    const p = this.player;
+    if (!p.alive) return;
+    const speed = Math.hypot(p.move.vel.x, p.move.vel.z);
+    if (!p.move.onGround || speed <= 40) {
+      this.playerStepT = 0;
+      return;
+    }
+    const walking = this.input.keys.has('ShiftLeft') || this.input.keys.has('ShiftRight');
+    const step = dt * speed / FEEL.walkSpeed;
+    const prev = this.playerStepT;
+    this.playerStepT += step;
+    if (Math.floor(this.playerStepT * 3.2) !== Math.floor(prev * 3.2)) {
+      this.noiseEvents.push({ pos: p.move.pos.clone(), radius: walking ? 170 : 380, team: p.team });
+    }
+  }
+
+  /** Bot 脚步声：同样产生小范围噪声，供敌方人机感知 */
+  private emitBotFootsteps(bot: Bot, dt: number) {
+    if (!bot.alive) return;
+    const speed = Math.hypot(bot.move.vel.x, bot.move.vel.z);
+    if (!bot.move.onGround || speed <= 40) {
+      this.botStepAcc.delete(bot);
+      return;
+    }
+    const step = dt * speed / FEEL.walkSpeed;
+    const prev = this.botStepAcc.get(bot) ?? 0;
+    this.botStepAcc.set(bot, prev + step);
+    if (Math.floor((prev + step) * 3.2) !== Math.floor(prev * 3.2)) {
+      this.noiseEvents.push({ pos: bot.move.pos.clone(), radius: 380, team: bot.team });
     }
   }
 
