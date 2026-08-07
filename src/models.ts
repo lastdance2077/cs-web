@@ -444,17 +444,18 @@ export function buildWorldScene(map: CompiledMap) {
 
   // 包点标记环 + 字母牌
   for (const s of map.sites) {
+    const ringR = Math.max(s.bounds.maxX - s.bounds.minX, s.bounds.maxZ - s.bounds.minZ) / 2;
     const ring = new THREE.Mesh(
-      new THREE.RingGeometry(s.radius * 0.85, s.radius * 1.05, 40),
+      new THREE.RingGeometry(ringR * 0.82, ringR * 1.0, 48),
       new THREE.MeshBasicMaterial({
         color: s.id === 'A' ? 0x2ecc71 : 0xe67e22,
         transparent: true,
-        opacity: 0.55,
+        opacity: 0.4,
         side: THREE.DoubleSide,
       }),
     );
     ring.rotation.x = -Math.PI / 2;
-    ring.position.set(s.pos.x, 0.6, s.pos.z);
+    ring.position.set((s.bounds.minX + s.bounds.maxX) / 2, 0.6, (s.bounds.minZ + s.bounds.maxZ) / 2);
     group.add(ring);
 
     const canvas = document.createElement('canvas');

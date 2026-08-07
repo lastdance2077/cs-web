@@ -276,6 +276,8 @@ export interface MapSite {
   id: 'A' | 'B';
   pos: THREE.Vector3;
   radius: number;
+  /** 包点区域的世界坐标边界（用于装包/拆包判定，不再只看中心半径） */
+  bounds: { minX: number; maxX: number; minZ: number; maxZ: number };
 }
 
 export interface CompiledMap {
@@ -341,7 +343,19 @@ function buildMap(def: MapDef): CompiledMap {
     if (!tiles.length) continue;
     const cx = tiles.reduce((s, t) => s + (t.x - def.w / 2 + 0.5) * def.tile, 0) / tiles.length;
     const cz = tiles.reduce((s, t) => s + (t.z - def.h / 2 + 0.5) * def.tile, 0) / tiles.length;
-    sites.push({ id: kind, pos: new THREE.Vector3(cx, 0, cz), radius: def.tile * 1.4 });
+    const ts = tiles.map((t) => t.x);
+    const tz = tiles.map((t) => t.z);
+    sites.push({
+      id: kind,
+      pos: new THREE.Vector3(cx, 0, cz),
+      radius: def.tile * 1.4,
+      bounds: {
+        minX: (Math.min(...ts) - def.w / 2) * def.tile,
+        maxX: (Math.max(...ts) - def.w / 2 + 1) * def.tile,
+        minZ: (Math.min(...tz) - def.h / 2) * def.tile,
+        maxZ: (Math.max(...tz) - def.h / 2 + 1) * def.tile,
+      },
+    });
   }
 
   // 出生点区域 = 购买区

@@ -955,8 +955,7 @@ export class Game {
 
   private nearbySite(pos: THREE.Vector3): MapSite | null {
     for (const s of this.map.sites) {
-      const d = Math.hypot(s.pos.x - pos.x, s.pos.z - pos.z);
-      if (d < s.radius) return s;
+      if (pos.x >= s.bounds.minX && pos.x <= s.bounds.maxX && pos.z >= s.bounds.minZ && pos.z <= s.bounds.maxZ) return s;
     }
     return null;
   }

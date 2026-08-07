@@ -763,7 +763,11 @@ export class Bot {
     // T 装包
     if (this.team === 'T' && this.hasBomb && !world.bombPlanted) {
       const site = world.map.sites.find((s) => s.id === this.siteChoice);
-      if (site && this.move.pos.distanceTo(site.pos) < site.radius) {
+      if (
+        site &&
+        this.move.pos.x >= site.bounds.minX && this.move.pos.x <= site.bounds.maxX &&
+        this.move.pos.z >= site.bounds.minZ && this.move.pos.z <= site.bounds.maxZ
+      ) {
         if (!this.interact) this.interact = { type: 'plant', t: 0, total: MATCH.plantTime };
         this.interact.t += dt;
         this.actions.plant = true;
